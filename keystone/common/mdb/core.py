@@ -26,19 +26,13 @@ def build_query_req(key, value, operators, table_schema):
         body['key_conditions'][key]['comparison_operator'] = op
     return body
 
-def build_get_req(hash_key, hash_value, table_schema, range_key=None,
-                  range_value=None):
+def build_get_req(keys, values, table_schema):
     body = {}
     body['consistent_read'] = True
     body['key'] = {}
-    if not hash_value:
-        raise Exception("No hash key in get request")
-    body['key'][hash_key] = {}
-    body['key'][hash_key][table_schema[hash_key]] = hash_value
-
-    if range_value:
-        body['key'][range_key] = {}
-        body['key'][range_key][table_schema[hash_key]] = range_value
+    for key, value in zip(keys, values):
+        body['key'][key] = {}
+        body['key'][key][table_schema[key]] = value
     return body
 
 def append_if_not_exists(req, hash_key):
@@ -87,7 +81,7 @@ def union_dicts(old_dict, new_dict):
             union[key] = old_dict[key]
 
 def build_update_req(keys, table_schema, new_dict, old_dict, key_values=None,
-        action=None):
+        action=None, return_values=None):
     body = {}
     body['key'] = {}
     if key_values is None:
@@ -101,6 +95,8 @@ def build_update_req(keys, table_schema, new_dict, old_dict, key_values=None,
     for key, value in changed_attrs.iteritems():
         body['attribute_updates'][key] = {'value': {table_schema[key]: value}}
         body['attribute_updates'][key]['action'] = action.get(key, 'PUT')
+    if return_values:
+        body['return_values'] = return_values
     return body
 
 def build_delete_req(keys, values, table_schema):
