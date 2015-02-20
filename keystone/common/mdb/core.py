@@ -1,4 +1,5 @@
 from magnetodbclient.v1 import client
+from keystone import exception
 
 class Mdb(object):
     def __init__(self):
@@ -24,6 +25,16 @@ def build_query_req(key, value, operators, table_schema):
         val_json = {table_schema[key]: value}
         body['key_conditions'][key]['attribute_value_list'] = [val_json]
         body['key_conditions'][key]['comparison_operator'] = op
+    return body
+
+def build_scan_req(keys, values, operators, table_schema):
+    body = {}
+    body['scan_filter'] = {}
+    for key, value, op in  zip(keys, values, operators):
+        body['scan_filter'][key] = {}
+        val_json = {table_schema[key]: value}
+        body['scan_filter'][key]['attribute_value_list'] = [val_json]
+        body['scan_filter'][key]['comparison_operator'] = op
     return body
 
 def build_get_req(keys, values, table_schema):

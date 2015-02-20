@@ -122,8 +122,8 @@ class Identity(identity.Driver):
 
     def get_user_by_name(self, user_name, domain_id):
         table_to_query = USER_TABLE['user']
-        req = build_get_req(table_to_query['hash_key'], domain_id,\
-                USER_SCHEMA, table_to_query['range_key'], user_name)
+        req = build_get_req(table_to_query.values(), [domain_id, user_name],
+                USER_SCHEMA)
         user_ref = MDB.get_item('user', req)
         if not user_ref:
             raise exception.UserNotFound(user_id=user_name)

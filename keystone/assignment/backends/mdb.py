@@ -47,7 +47,8 @@ SCHEMA = {
         'assignment': {
             'actor_id': 'S',
             'target_id': 'S',
-            'role_ids': 'SS'
+            'role_ids': 'SS',
+            'type': 'S'
         },
         'target_id_index': {
             'target_id': 'S',
@@ -62,27 +63,6 @@ SCHEMA = {
 }
 
 MDB = Mdb().get_client()
-
-class AssignmentType(object):
-    USER_PROJECT = 'UserProject'
-    GROUP_PROJECT = 'GroupProject'
-    USER_DOMAIN = 'UserDomain'
-    GROUP_DOMAIN = 'GroupDomain'
-
-    @classmethod
-    def calculate_type(cls, user_id, group_id, project_id, domain_id):
-        if user_id:
-            if project_id:
-                return cls.USER_PROJECT
-            if domain_id:
-                return cls.USER_DOMAIN
-        if group_id:
-            if project_id:
-                return cls.GROUP_PROJECT
-            if domain_id:
-                return cls.GROUP_DOMAIN
-        # Invalid parameters combination
-        raise exception.AssignmentTypeCalculationError(**locals())
 
 
 class Assignment(keystone_assignment.Driver):
@@ -100,140 +80,154 @@ class Assignment(keystone_assignment.Driver):
         users = users['items']
         ret = []
         for u in users:
-            ret.append(u['actor_id'].values()[0].encode('ascii'))
-        import pdb; pdb.set_trace()
+            if u.has_key('role_ids'):
+                ret.append(u['actor_id'].values()[0].encode('ascii'))
         return ret
 
     def _get_metadata(self, user_id=None, tenant_id=None,
                       domain_id=None, group_id=None, session=None):
-        # TODO(henry-nash): This method represents the last vestiges of the old
-        # metadata concept in this driver.  Although we no longer need it here,
-        # since the Manager layer uses the metadata concept across all
-        # assignment drivers, we need to remove it from all of them in order to
-        # finally remove this method.
-
-        # We aren't given a session when called by the manager directly.
-        if session is None:
-            session = sql.get_session()
-
-        q = session.query(RoleAssignment)
-
-        def _calc_assignment_type():
-            # Figure out the assignment type we're checking for from the args.
-            if user_id:
-                if tenant_id:
-                    return AssignmentType.USER_PROJECT
-                else:
-                    return AssignmentType.USER_DOMAIN
-            else:
-                if tenant_id:
-                    return AssignmentType.GROUP_PROJECT
-                else:
-                    return AssignmentType.GROUP_DOMAIN
-
-        q = q.filter_by(type=_calc_assignment_type())
-        q = q.filter_by(actor_id=user_id or group_id)
-        q = q.filter_by(target_id=tenant_id or domain_id)
-        refs = q.all()
-        if not refs:
-            raise exception.MetadataNotFound()
-
         metadata_ref = {}
         metadata_ref['roles'] = []
-        for assignment in refs:
-            role_ref = {}
-            role_ref['id'] = assignment.role_id
-            if assignment.inherited:
-                role_ref['inherited_to'] = 'projects'
-            metadata_ref['roles'].append(role_ref)
-
-        return metadata_ref
+        actor_id = user_id or group_id
+        target_id = tenant_id or domain_id
+        req = build_get_req(TABLES['assignment'].values(), [actor_id,\
+                target_id], SCHEMA['assignment'])
+        res = MDB.get_item('assignment', req)
+        if bool(res):
+            if(res['item'].has_key('role_ids')):
+                metadata_ref['roles'] =  res['item']['role_ids']['SS']
+                return metadata_ref
+        raise exception.MetadataNotFound()
 
     def create_grant(self, role_id, user_id=None, group_id=None,
                      domain_id=None, project_id=None,
                      inherited_to_projects=False):
+        target_id = None
+        actor_id = None
+        assignment_type = None
+        if user_id:
+            actor_id=user_id
+            if project_id:
+                target_id=project_id
+                assignment_type='UserProject'
+            if domain_id:
+                target_id=domain_id
+                assignment_type='UserDomain'
+        if group_id:
+            actor_id = group_id
+            if project_id:
+                target_id=project_id
+                assignment_type='GroupProject'
+            if domain_id:
+                target_id=domain_id
+                assignment_type='GroupDomain'
 
-        assignment_type = AssignmentType.calculate_type(
-            user_id, group_id, project_id, domain_id)
-        if assignment_type == 'UserProject':
-            d = {'role_ids': role_id}
-            import pdb; pdb.set_trace()
-            req = build_update_req(TABLES['target_id_index'].values(),
-                    [user_id, tenant_id], SCHEMA['target_id_index'], d, {})
+        # add to the the target_id_index table.
+        d = {'role_ids': [role_id]}
+        action = {'role_ids': 'ADD'}
+        req = build_update_req(TABLES['target_id_index'].values(),
+                SCHEMA['target_id_index'], d, {}, key_values=[target_id, actor_id],
+                action=action)
+        res = MDB.update_item('target_id_index', req)
 
-        try:
-            with sql.transaction() as session:
-                session.add(RoleAssignment(
-                    type=assignment_type,
-                    actor_id=user_id or group_id,
-                    target_id=project_id or domain_id,
-                    role_id=role_id,
-                    inherited=inherited_to_projects))
-        except sql.DBDuplicateEntry:
-            # The v3 grant APIs are silent if the assignment already exists
-            pass
+        # add to the role_id_index table.
+        d = {'target_ids': [target_id]}
+        action = {'target_ids': 'ADD'}
+        req = build_update_req(TABLES['role_id_index'].values(),
+                SCHEMA['role_id_index'], d, {}, key_values=[role_id, actor_id],
+                action=action)
+        res = MDB.update_item('role_id_index', req)
+
+        # add to the assignment table.
+        d = {'role_ids': [role_id]}
+        d['type'] = assignment_type
+        action = {'role_ids': 'ADD'}
+        req = build_update_req(TABLES['assignment'].values(),
+                SCHEMA['assignment'], d, {}, key_values=[actor_id, target_id],
+                action=action)
+        res = MDB.update_item('assignment', req)
 
     def list_grant_role_ids(self, user_id=None, group_id=None,
                             domain_id=None, project_id=None,
                             inherited_to_projects=False):
-        import pdb; pdb.set_trace()
-        with sql.transaction() as session:
-            q = session.query(RoleAssignment.role_id)
-            q = q.filter(RoleAssignment.actor_id == (user_id or group_id))
-            q = q.filter(RoleAssignment.target_id == (project_id or domain_id))
-            q = q.filter(RoleAssignment.inherited == inherited_to_projects)
-            return [x.role_id for x in q.all()]
-
-    def _build_grant_filter(self, session, role_id, user_id, group_id,
-                            domain_id, project_id, inherited_to_projects):
-        q = session.query(RoleAssignment)
-        q = q.filter_by(actor_id=user_id or group_id)
-        q = q.filter_by(target_id=project_id or domain_id)
-        q = q.filter_by(role_id=role_id)
-        q = q.filter_by(inherited=inherited_to_projects)
-        return q
+        actor_id = user_id or group_id
+        target_id = project_id or domain_id
+        req = build_get_req(TABLES['assignment'].values(), [actor_id,\
+                target_id], SCHEMA['assignment'])
+        res = MDB.get_item('assignment', req)
+        if bool(res):
+            if(res['item'].has_key('role_ids')):
+                return res['item']['role_ids']['SS']
+        return []
 
     def check_grant_role_id(self, role_id, user_id=None, group_id=None,
                             domain_id=None, project_id=None,
                             inherited_to_projects=False):
-        with sql.transaction() as session:
-            try:
-                q = self._build_grant_filter(
-                    session, role_id, user_id, group_id, domain_id, project_id,
-                    inherited_to_projects)
-                q.one()
-            except sql.NotFound:
-                raise exception.RoleNotFound(role_id=role_id)
+        actor_id = user_id or group_id
+        target_id = project_id or domain_id
+        req = build_get_req(TABLES['assignment'].values(), [actor_id,\
+                target_id], SCHEMA['assignment'])
+        res = MDB.get_item('assignment', req)
+        if bool(res):
+            if(res['item'].has_key('role_ids')):
+                return res['item']['role_ids']['SS'][0]
+        raise exception.RoleNotFound(role_id=role_id)
 
     def delete_grant(self, role_id, user_id=None, group_id=None,
                      domain_id=None, project_id=None,
                      inherited_to_projects=False):
-        with sql.transaction() as session:
-            q = self._build_grant_filter(
-                session, role_id, user_id, group_id, domain_id, project_id,
-                inherited_to_projects)
-            if not q.delete(False):
-                raise exception.RoleNotFound(role_id=role_id)
+        actor_id = user_id or group_id
+        target_id = project_id or domain_id
+        req = build_get_req(TABLES['assignment'].values(), [actor_id,\
+                target_id], SCHEMA['assignment'])
+        res = MDB.get_item('assignment', req)
+        if bool(res):
+            role_ids = None
+            if res['item'].has_key('role_ids'):
+                role_ids = res['item']['role_ids']['SS']
+            if role_ids and role_id in role_ids:
+                #remove from target_id_index table.
+                d = {'role_ids': [role_id]}
+                action = {'role_ids': 'DELETE'}
+                req = build_update_req(TABLES['target_id_index'].values(),
+                        SCHEMA['target_id_index'], d, {}, key_values=[target_id, actor_id],
+                        action=action)
+                res = MDB.update_item('target_id_index', req)
+
+                # remove from the role_id_index table.
+                d = {'target_ids': [target_id]}
+                action = {'target_ids': 'DELETE'}
+                req = build_update_req(TABLES['role_id_index'].values(),
+                        SCHEMA['role_id_index'], d, {}, key_values=[role_id, actor_id],
+                        action=action)
+                res = MDB.update_item('role_id_index', req)
+
+                # add to the assignment table.
+                d = {'role_ids': [role_id]}
+                action = {'role_ids': 'DELETE'}
+                req = build_update_req(TABLES['assignment'].values(),
+                        SCHEMA['assignment'], d, {}, key_values=[actor_id, target_id],
+                        action=action)
+                res = MDB.update_item('assignment', req)
+                return
+
+        raise exception.RoleNotFound(role_id=role_id)
+
 
     def _list_project_ids_for_actor(self, actors, hints, inherited,
                                     group_only=False):
-        # TODO(henry-nash): Now that we have a single assignment table, we
-        # should be able to honor the hints list that is provided.
 
-        assignment_type = [AssignmentType.GROUP_PROJECT]
-        if not group_only:
-            assignment_type.append(AssignmentType.USER_PROJECT)
-
-        sql_constraints = sqlalchemy.and_(
-            RoleAssignment.type.in_(assignment_type),
-            RoleAssignment.inherited == inherited,
-            RoleAssignment.actor_id.in_(actors))
-
-        with sql.transaction() as session:
-            query = session.query(RoleAssignment.target_id).filter(
-                sql_constraints).distinct()
-
-        return [x.target_id for x in query.all()]
+        # query the assignment table.
+        projects = []
+        for actor in actors:
+            req = build_query_req(['actor_id'], [actor], ['EQ'],
+                    SCHEMA['assignment'])
+            res = MDB.query('assignment', req)
+            for item in res['items']:
+                if item.has_key('role_ids'):
+                    if item['type']['S'] == 'UserProject':
+                        projects.append(item['target_id']['S'].encode('ascii'))
+        return projects
 
     def list_project_ids_for_user(self, user_id, group_ids, hints,
                                   inherited=False):
@@ -245,46 +239,33 @@ class Assignment(keystone_assignment.Driver):
 
     def list_domain_ids_for_user(self, user_id, group_ids, hints,
                                  inherited=False):
-        with sql.transaction() as session:
-            query = session.query(RoleAssignment.target_id)
-            filters = []
-
-            if user_id:
-                sql_constraints = sqlalchemy.and_(
-                    RoleAssignment.actor_id == user_id,
-                    RoleAssignment.inherited == inherited,
-                    RoleAssignment.type == AssignmentType.USER_DOMAIN)
-                filters.append(sql_constraints)
-
-            if group_ids:
-                sql_constraints = sqlalchemy.and_(
-                    RoleAssignment.actor_id.in_(group_ids),
-                    RoleAssignment.inherited == inherited,
-                    RoleAssignment.type == AssignmentType.GROUP_DOMAIN)
-                filters.append(sql_constraints)
-
-            if not filters:
-                return []
-
-            query = query.filter(sqlalchemy.or_(*filters)).distinct()
-
-            return [assignment.target_id for assignment in query.all()]
+        actors = group_ids.append(user_id)
+        # query the assignment table.
+        domains = []
+        for actor in actors:
+            req = build_query_req(['actor_id'], [actor], ['EQ'],
+                    SCHEMA['assignment'])
+            res = MDB.query('assignment', req)
+            for item in res['items']:
+                if item.has_key('role_ids'):
+                    if item['type']['S'] == 'UserDomain':
+                        domains.append(item['target_id']['S'].encode('ascii'))
+        return domains
 
     def list_role_ids_for_groups_on_domain(self, group_ids, domain_id):
         if not group_ids:
             # If there's no groups then there will be no domain roles.
             return []
-
-        sql_constraints = sqlalchemy.and_(
-            RoleAssignment.type == AssignmentType.GROUP_DOMAIN,
-            RoleAssignment.target_id == domain_id,
-            RoleAssignment.inherited == false(),
-            RoleAssignment.actor_id.in_(group_ids))
-
-        with sql.transaction() as session:
-            query = session.query(RoleAssignment.role_id).filter(
-                sql_constraints).distinct()
-        return [role.role_id for role in query.all()]
+        roles = []
+        for actor in groups:
+            req = build_get_req(TABLES['asssignment'].values(), [actor,\
+                    domain_id], SCHEMA['assignment'])
+            res = MDB.get_item('assignment', req)
+            if bool(res):
+                if res.has_key('role_ids'):
+                    if res['type']['S'] == 'GroupDomain':
+                        roles.extend(item['role_ids']['SS'])
+        return roles
 
     def list_role_ids_for_groups_on_project(
             self, group_ids, project_id, project_domain_id, project_parents):
@@ -293,41 +274,16 @@ class Assignment(keystone_assignment.Driver):
             # If there's no groups then there will be no project roles.
             return []
 
-        # NOTE(rodrigods): First, we always include projects with
-        # non-inherited assignments
-        sql_constraints = sqlalchemy.and_(
-            RoleAssignment.type == AssignmentType.GROUP_PROJECT,
-            RoleAssignment.inherited == false(),
-            RoleAssignment.target_id == project_id)
-
-        if CONF.os_inherit.enabled:
-            # Inherited roles from domains
-            sql_constraints = sqlalchemy.or_(
-                sql_constraints,
-                sqlalchemy.and_(
-                    RoleAssignment.type == AssignmentType.GROUP_DOMAIN,
-                    RoleAssignment.inherited,
-                    RoleAssignment.target_id == project_domain_id))
-
-            # Inherited roles from projects
-            if project_parents:
-                sql_constraints = sqlalchemy.or_(
-                    sql_constraints,
-                    sqlalchemy.and_(
-                        RoleAssignment.type == AssignmentType.GROUP_PROJECT,
-                        RoleAssignment.inherited,
-                        RoleAssignment.target_id.in_(project_parents)))
-
-        sql_constraints = sqlalchemy.and_(
-            sql_constraints, RoleAssignment.actor_id.in_(group_ids))
-
-        with sql.transaction() as session:
-            # NOTE(morganfainberg): Only select the columns we actually care
-            # about here, in this case role_id.
-            query = session.query(RoleAssignment.role_id).filter(
-                sql_constraints).distinct()
-
-        return [result.role_id for result in query.all()]
+        roles = []
+        for actor in groups:
+            req = build_get_req(TABLES['asssignment'].values(), [actor,\
+                    project_id], SCHEMA['assignment'])
+            res = MDB.get_item('assignment', req)
+            if bool(res):
+                if res.has_key('role_ids'):
+                    if res['type']['S'] == 'GroupProject':
+                        roles.extend(item['role_ids']['SS'])
+        return roles
 
     def list_project_ids_for_groups(self, group_ids, hints,
                                     inherited=False):
@@ -335,26 +291,24 @@ class Assignment(keystone_assignment.Driver):
             group_ids, hints, inherited, group_only=True)
 
     def list_domain_ids_for_groups(self, group_ids, inherited=False):
-        if not group_ids:
-            # If there's no groups then there will be no domains.
-            return []
-
-        group_sql_conditions = sqlalchemy.and_(
-            RoleAssignment.type == AssignmentType.GROUP_DOMAIN,
-            RoleAssignment.inherited == inherited,
-            RoleAssignment.actor_id.in_(group_ids))
-
-        with sql.transaction() as session:
-            query = session.query(RoleAssignment.target_id).filter(
-                group_sql_conditions).distinct()
-        return [x.target_id for x in query.all()]
+        # query the assignment table.
+        domains = []
+        for actor in groups:
+            req = build_query_req(['actor_id'], [actor], ['EQ'],
+                    SCHEMA['assignment'])
+            res = MDB.query('assignment', req)
+            for item in res['items']:
+                if item.has_key('role_ids'):
+                    if item['type']['S'] == 'GroupDomain':
+                        domains.append(item['target_id']['S'].encode('ascii'))
+        return domains
 
     def add_role_to_user_and_project(self, user_id, tenant_id, role_id):
         # add to the the target_id_index table.
         d = {'role_ids': [role_id]}
         action = {'role_ids': 'ADD'}
         req = build_update_req(TABLES['target_id_index'].values(),
-                SCHEMA['target_id_index'], d, {}, key_values=[user_id, tenant_id],
+                SCHEMA['target_id_index'], d, {}, key_values=[tenant_id, user_id],
                 action=action)
         res = MDB.update_item('target_id_index', req)
 
@@ -368,6 +322,7 @@ class Assignment(keystone_assignment.Driver):
 
         # add to the assignment table.
         d = {'role_ids': [role_id]}
+        d['type'] = 'UserProject'
         action = {'role_ids': 'ADD'}
         req = build_update_req(TABLES['assignment'].values(),
                 SCHEMA['assignment'], d, {}, key_values=[user_id, tenant_id],
@@ -379,7 +334,7 @@ class Assignment(keystone_assignment.Driver):
         d = {'role_ids': [role_id]}
         action = {'role_ids': 'DELETE'}
         req = build_update_req(TABLES['target_id_index'].values(),
-                SCHEMA['target_id_index'], d, {}, key_values=[user_id, tenant_id],
+                SCHEMA['target_id_index'], d, {}, key_values=[tenant_id, user_id],
                 action=action)
         res = MDB.update_item('target_id_index', req)
 
@@ -402,78 +357,136 @@ class Assignment(keystone_assignment.Driver):
 
     def list_role_assignments(self):
 
-        def denormalize_role(ref):
+        def denormalize(ref):
             assignment = {}
-            if ref.type == AssignmentType.USER_PROJECT:
-                assignment['user_id'] = ref.actor_id
-                assignment['project_id'] = ref.target_id
-            elif ref.type == AssignmentType.USER_DOMAIN:
-                assignment['user_id'] = ref.actor_id
-                assignment['domain_id'] = ref.target_id
-            elif ref.type == AssignmentType.GROUP_PROJECT:
-                assignment['group_id'] = ref.actor_id
-                assignment['project_id'] = ref.target_id
-            elif ref.type == AssignmentType.GROUP_DOMAIN:
-                assignment['group_id'] = ref.actor_id
-                assignment['domain_id'] = ref.target_id
+            ret = []
+            if ref['type']['S'] == 'UserProject':
+                assignment['user_id'] = ref['actor_id']['S']
+                assignment['project_id'] = ref['target_id']['S']
+            elif ref['type']['S'] == 'UserDomain':
+                assignment['user_id'] = ref['actor_id']['S']
+                assignment['domain_id'] = ref['target_id']['S']
+            elif ref['type']['S'] == 'GroupProject':
+                assignment['group_id'] = ref['actor_id']['S']
+                assignment['project_id'] = ref['target_id']['S']
+            elif ref['type']['S'] == 'GroupDomain':
+                assignment['group_id'] = ref['actor_id']['S']
+                assignment['domain_id'] = ref['target_id']['S']
             else:
                 raise exception.Error(message=_(
                     'Unexpected assignment type encountered, %s') %
                     ref.type)
-            assignment['role_id'] = ref.role_id
-            if ref.inherited:
-                assignment['inherited_to_projects'] = 'projects'
-            return assignment
+            if ref.has_key('role_ids'):
+                for role in ref['role_ids']['SS']:
+                    assignment_copy = assignment.copy()
+                    assignment_copy['role_id'] = role
+                    ret.append(assignment_copy)
+            return ret
+        # work around because of bug #1423858
+        types = ['UserProject', 'UserDomain', 'GroupProject', 'GroupDomain']
+        return_value = []
+        for typ in types:
+            req = build_scan_req(['type'], [typ], ['EQ'], SCHEMA['assignment'])
+            res = MDB.scan('assignment', req)
+            for item in res['items']:
+                return_value.extend(denormalize(item))
+        return return_value
 
-        with sql.transaction() as session:
-            refs = session.query(RoleAssignment).all()
-            return [denormalize_role(ref) for ref in refs]
-
+    # don't delete any row, just updates to the row.
     def delete_project_assignments(self, project_id):
-        with sql.transaction() as session:
-            q = session.query(RoleAssignment)
-            q = q.filter_by(target_id=project_id)
-            q.delete(False)
+        #remove from target_id_index table.
+        req = build_query_req(['target_id'], [project_id], ['EQ'],
+                SCHEMA['target_id_index'])
+        # use this to delete values from three tables
+        result = MDB.query('target_id_index', req)
+
+        for item in result['items']:
+            if item.has_key('role_ids'):
+                d = {'role_ids': item['role_ids']['SS']}
+                action = {'role_ids': 'DELETE'}
+                #update the target_id_index table
+                req = build_update_req(TABLES['target_id_index'].values(),
+                        SCHEMA['target_id_index'], d, {},
+                        key_values=[item['target_id']['S'], item['actor_id']['S']],
+                        action=action)
+                res = MDB.update_item('target_id_index', req)
+                #update the assignment table
+                req = build_update_req(TABLES['assignment'].values(),
+                        SCHEMA['assignment'], d, {},
+                        key_values=[item['actor_id']['S'], item['target_id']['S']],
+                        action=action)
+                res = MDB.update_item('assignment', req)
+                #update the role_id_index table
+                roles = item['role_ids']['SS']
+                actor_id = item['actor_id']['S']
+                d = {'target_ids': [item['target_id']['S']]}
+                action = {'target_ids': 'DELETE'}
+                for role in roles:
+                    req = build_update_req(TABLES['role_id_index'].values(),
+                        SCHEMA['role_id_index'], d, {},
+                        key_values=[role, actor_id], action=action)
+                    res = MDB.update_item('role_id_index', req)
+
 
     def delete_role_assignments(self, role_id):
-        with sql.transaction() as session:
-            q = session.query(RoleAssignment)
-            q = q.filter_by(role_id=role_id)
-            q.delete(False)
+        req = build_query_req(['role_id'], [role_id], ['EQ'],
+                SCHEMA['role_id_index'])
+        result = MDB.query('role_id_index', req)
+        for item in result['items']:
+            if item.has_key('target_ids'):
+                d = {'role_ids': [item['role_id']['S']]}
+                action = {'role_ids': 'DELETE'}
+                for target_id in item['target_ids']['SS']:
+                    #update the assignment table
+                    req = build_update_req(TABLES['assignment'].values(),
+                            SCHEMA['assignment'], d, {},
+                            key_values=[item['actor_id']['S'], target_id],
+                            action=action)
+                    res = MDB.update_item('assignment', req)
+                    #update the target_id_index table
+                    req = build_update_req(TABLES['target_id_index'].values(),
+                            SCHEMA['target_id_index'], d, {},
+                            key_values=[target_id, item['actor_id']['S']],
+                            action=action)
+                    res = MDB.update_item('target_id_index', req)
+                #update the role_id_index table
+                d = {'target_ids': item['target_ids']['SS']}
+                action = {'target_ids': 'DELETE'}
+                req = build_update_req(TABLES['role_id_index'].values(),
+                        SCHEMA['role_id_index'], d, {},
+                        key_values=[role_id, item['actor_id']['S']],
+                        action=action)
+                res = MDB.update_item('role_id_index', req)
 
     def delete_user(self, user_id):
-        with sql.transaction() as session:
-            q = session.query(RoleAssignment)
-            q = q.filter_by(actor_id=user_id)
-            q.delete(False)
+       req = build_query_req(['actor_id'], [user_id], ['EQ'],
+               SCHEMA['assignment'])
+       result = MDB.query('assignment', req)
+       for item in result['items']:
+           if item.has_key('role_ids'):
+               d = {'role_ids': item['role_ids']['SS']}
+               action = {'role_ids': 'DELETE'}
+               #update the assignment table
+               req = build_update_req(TABLES['assignment'].values(),
+                       SCHEMA['assignment'], d, {},
+                       key_values=[user_id, item['target_id']['S']],
+                       action=action)
+               res = MDB.update_item('assignment', req)
+               #update the target_id_index table
+               req = build_update_req(TABLES['target_id_index'].values(),
+                       SCHEMA['target_id_index'], d, {},
+                       key_values=[item['target_id']['S'], user_id],
+                       action=action)
+               res = MDB.update_item('target_id_index', req)
+               for role in item['role_ids']['SS']:
+                   d = {'target_ids': [item['target_id']['S']]}
+                   action = {'target_ids': 'DELETE'}
+                   #update the role_id_index table
+                   req = build_update_req(TABLES['role_id_index'].values(),
+                           SCHEMA['role_id_index'], d, {},
+                           key_values=[role, item['actor_id']['S']],
+                           action=action)
+                   res = MDB.update_item('role_id_index', req)
 
     def delete_group(self, group_id):
-        with sql.transaction() as session:
-            q = session.query(RoleAssignment)
-            q = q.filter_by(actor_id=group_id)
-            q.delete(False)
-
-
-class RoleAssignment(sql.ModelBase, sql.DictBase):
-    __tablename__ = 'assignment'
-    attributes = ['type', 'actor_id', 'target_id', 'role_id', 'inherited']
-    # NOTE(henry-nash); Postgres requires a name to be defined for an Enum
-    type = sql.Column(
-        sql.Enum(AssignmentType.USER_PROJECT, AssignmentType.GROUP_PROJECT,
-                 AssignmentType.USER_DOMAIN, AssignmentType.GROUP_DOMAIN,
-                 name='type'),
-        nullable=False)
-    actor_id = sql.Column(sql.String(64), nullable=False, index=True)
-    target_id = sql.Column(sql.String(64), nullable=False)
-    role_id = sql.Column(sql.String(64), nullable=False)
-    inherited = sql.Column(sql.Boolean, default=False, nullable=False)
-    __table_args__ = (sql.PrimaryKeyConstraint('type', 'actor_id', 'target_id',
-                                               'role_id'), {})
-
-    def to_dict(self):
-        """Override parent to_dict() method with a simpler implementation.
-
-        RoleAssignment doesn't have non-indexed 'extra' attributes, so the
-        parent implementation is not applicable.
-        """
-        return dict(six.iteritems(self))
+       self.delete_user(group_id)

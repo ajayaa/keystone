@@ -643,6 +643,7 @@ class Driver(object):
         return role_dict
 
     def _roles_from_role_dicts(self, dict_list, inherited):
+        return dict_list
         role_list = []
         for d in dict_list:
             if ((not d.get('inherited_to') and not inherited) or
