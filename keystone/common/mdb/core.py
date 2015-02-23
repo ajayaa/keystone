@@ -105,7 +105,10 @@ def build_update_req(keys, table_schema, new_dict, old_dict, key_values=None,
     body['attribute_updates'] = {}
     for key, value in changed_attrs.iteritems():
         body['attribute_updates'][key] = {'value': {table_schema[key]: value}}
-        body['attribute_updates'][key]['action'] = action.get(key, 'PUT')
+        if action is None:
+            body['attribute_updates'][key]['action'] = action.get(key, 'PUT')
+        else:
+            body['attribute_updates'][key]['action'] = 'PUT'
     if return_values:
         body['return_values'] = return_values
     return body
