@@ -102,6 +102,8 @@ def build_update_req(keys, table_schema, new_dict, old_dict, key_values=None,
         for k, v in zip(keys, key_values):
             body['key'][k] = {table_schema[k]: v}
     changed_attrs = diff_dicts(new_dict, old_dict)
+    if not changed_attrs:
+        return {}
     body['attribute_updates'] = {}
     for key, value in changed_attrs.iteritems():
         body['attribute_updates'][key] = {'value': {table_schema[key]: value}}
