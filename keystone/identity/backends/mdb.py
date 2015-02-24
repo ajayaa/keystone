@@ -21,13 +21,20 @@ from keystone import identity
 
 CONF = config.CONF
 
-USER_TABLE = {
+TABLES = {
     'user': {
-      'hash_key': 'domain_id',
-      'range_key': 'name'
+        'hash_key': 'domain_id',
+        'range_key': 'name'
     },
     'user_id_index': {
-      'hash_key': 'id'
+        'hash_key': 'id'
+    },
+    'group': {
+        'hash_key': 'domain_id',
+        'range_key': 'name'
+    },
+    'group_id_index': {
+        'hask_key': 'group_id'
     }
 }
 
@@ -40,6 +47,13 @@ SCHEMA = {
         'enabled': 'N',
         'domain_id': 'S',
         'default_project_id': 'S'
+    },
+    'group': {
+        'id': 'S',
+        'name': 'S',
+        'domain_id': 'S',
+        'extra': 'S',
+        'description': 'S'
     }
 }
 
@@ -111,10 +125,11 @@ class Identity(identity.Driver):
         user = utils.hash_user_password(user)
         user = to_db(user)
         put_user_json = build_create_req(user, SCHEMA['user'])
-        for table_name, keys in USER_TABLE.iteritems():
+        tables = ['user', 'user_id_index']
+        for table in tables:
             put_user_json = append_if_not_exists(put_user_json,\
-                    keys['hash_key'])
-            MDB.put_item(table_name, put_user_json)
+                    TABLES[table]['hash_key'])
+            MDB.put_item(table, put_user_json)
         return identity.filter_user(from_db(user))
 
     def list_users(self, hints):
@@ -135,7 +150,7 @@ class Identity(identity.Driver):
                 filter_values.append(filt['value'])
         user_ref = None
         if domain is not None:
-            table_to_query = USER_TABLE['user']
+            table_to_query = TABLES['user']
             req = build_query_req([table_to_query['hash_key']], [domain], ['EQ'],\
                     SCHEMA['user'])
             user_refs = MDB.query('user', req)
@@ -149,7 +164,7 @@ class Identity(identity.Driver):
         return [identity.filter_user(x) for x in users]
 
     def _get_user(self, user_id):
-        table_to_query = USER_TABLE['user_id_index']
+        table_to_query = TABLES['user_id_index']
         req = build_query_req([table_to_query['hash_key']], [user_id], ['EQ'],\
                 SCHEMA['user'])
 
@@ -169,7 +184,7 @@ class Identity(identity.Driver):
         return identity.filter_user(user_ref)
 
     def get_user_by_name(self, user_name, domain_id):
-        table_to_query = USER_TABLE['user']
+        table_to_query = TABLES['user']
         req = build_get_req(table_to_query.values(), [domain_id, user_name],
                 SCHEMA['user'])
         user_ref = MDB.get_item('user', req)
@@ -185,12 +200,12 @@ class Identity(identity.Driver):
         user = utils.hash_user_password(user)
         old_user = to_db(self._get_user(user_id))
         new_user = to_db(user)
-        req = build_update_req(USER_TABLE['user'].values(),
+        req = build_update_req(TABLES['user'].values(),
         SCHEMA['user'], new_user, old_user, action={})
         if req:
             res = MDB.update_item('user', req)
 
-        req = build_update_req(USER_TABLE['user_id_index'].values(),
+        req = build_update_req(TABLES['user_id_index'].values(),
                 SCHEMA['user'], new_user, old_user, action={})
         if req:
             res = MDB.update_item('user_id_index', req)
@@ -201,10 +216,10 @@ class Identity(identity.Driver):
         ref = self._get_user(user_id)
         domain_id = ref['domain_id']
         name = ref['name']
-        req = build_delete_req(USER_TABLE['user'].values(), [domain_id,\
+        req = build_delete_req(TABLES['user'].values(), [domain_id,\
                 name], SCHEMA['user'])
         MDB.delete_item('user', req)
-        req = build_delete_req(USER_TABLE['user_id_index'].values(),
+        req = build_delete_req(TABLES['user_id_index'].values(),
                 [user_id], SCHEMA['user'])
         MDB.delete_item('user_id_index', req)
 
