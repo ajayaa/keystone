@@ -13,7 +13,7 @@
 # under the License.
 
 """Main entry point into the Identity service."""
-
+import json
 import abc
 import functools
 import os
@@ -63,11 +63,6 @@ def filter_user(user_ref):
             user_ref['extra'].pop('tenants', None)
         except KeyError:
             pass
-        enabled = user_ref.pop('enabled', None)
-        if enabled == '1':
-            user_ref['enabled'] = True
-        elif enabled == '0':
-            user_ref['enabled'] = False
     return user_ref
 
 
@@ -613,7 +608,7 @@ class Manager(manager.Manager):
             # back domains for that scope.
             self._ensure_domain_id_in_hints(hints, domain_scope)
         else:
-            # We are effectively satisfying any domain_id filter by the above
+            # We are effectively satisfying any domain_id  by the above
             # driver selection, so remove any such filter.
             self._mark_domain_id_filter_satisfied(hints)
         ref_list = driver.list_users(hints)

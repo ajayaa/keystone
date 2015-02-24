@@ -11,6 +11,7 @@
 # WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 # License for the specific language governing permissions and limitations
 # under the License.
+import json
 from keystone.common.mdb import *
 from keystone.common import utils
 from keystone import config
@@ -41,6 +42,35 @@ USER_SCHEMA = {
 }
 
 MDB = Mdb().get_client()
+
+def to_db(user):
+    if user.has_key('enabled'):
+        user['enabled'] = int(user['enabled'])
+    extra = {}
+    if user.has_key('email'):
+        extra['email'] = user['email']
+        user.pop('email')
+    if user.has_key('description'):
+        extra['description'] = user['description']
+        user.pop('description')
+    if user.has_key('project_id'):
+        extra['project_id'] = user['project_id']
+        user.pop('project_id')
+    user['extra'] = json.dumps(extra)
+    for item in user.items():
+        if user[item[0]] is None:
+            user.pop(item[0])
+    return user
+
+def from_db(user):
+    if user.has_key('enabled'):
+        user['enabled'] = bool(user['enabled'])
+    if user.has_key('extra'):
+        user['extra'] = json.loads(user['extra'])
+        user.update(user['extra'])
+        user.pop('extra')
+    return user
+
 
 class Identity(identity.Driver):
     # NOTE(henry-nash): Override the __init__() method so as to take a
@@ -77,28 +107,44 @@ class Identity(identity.Driver):
 
     def create_user(self, user_id, user):
         user = utils.hash_user_password(user)
+        user = to_db(user)
         put_user_json = build_create_req(user, USER_SCHEMA)
         for table_name, keys in USER_TABLE.iteritems():
             put_user_json = append_if_not_exists(put_user_json,\
                     keys['hash_key'])
             MDB.put_item(table_name, put_user_json)
-        return identity.filter_user(user)
+        return identity.filter_user(from_db(user))
 
     def list_users(self, hints):
         domain = None
+        filter_keys = []
+        filter_values = []
         for filt in hints.filters:
             if filt['name'] == 'domain_id':
                 domain = filt['value']
+            elif filt['name'] == 'enabled':
+                filter_keys.append(filt['name'])
+                if filt['value'].lower() == 'false':
+                    filter_values.append(0)
+                else:
+                    filter_values.append(1)
             else:
-                raise exception.NotFound("filter in mdb")
-        table_to_query = USER_TABLE['user']
-        req = build_query_req([table_to_query['hash_key']], [domain], ['EQ'],\
-                USER_SCHEMA)
-        #req = build_get_req(table_to_query['hash_key'], domain,\
-        #        USER_SCHEMA)
-        user_refs = MDB.query('user', req)
-        return [identity.filter_user(strip_types_unicode(x))\
-                for x in user_refs['items']]
+                filter_keys.append(filt['name'])
+                filter_values.append(filt['value'])
+        user_ref = None
+        if domain is not None:
+            table_to_query = USER_TABLE['user']
+            req = build_query_req([table_to_query['hash_key']], [domain], ['EQ'],\
+                    USER_SCHEMA)
+            user_refs = MDB.query('user', req)
+        else:
+            #work around because of bug #142358
+            ops = ['EQ'] * len(filter_keys)
+            req = build_scan_req(filter_keys, filter_values, ops,
+                    USER_SCHEMA, limit=100000)
+            user_refs = MDB.scan('user', req)
+        users = [from_db(strip_types_unicode(x)) for x in user_refs['items']]
+        return [identity.filter_user(x) for x in users]
 
     def _get_user(self, user_id):
         table_to_query = USER_TABLE['user_id_index']
@@ -112,7 +158,7 @@ class Identity(identity.Driver):
             raise Exception("More than one user with same id")
         else:
             user_ref = strip_types_unicode(user_ref['items'][0])
-        return user_ref
+        return from_db(user_ref)
 
     def get_user(self, user_id):
         user_ref = self._get_user(user_id)
@@ -128,34 +174,26 @@ class Identity(identity.Driver):
         if not user_ref:
             raise exception.UserNotFound(user_id=user_name)
         user_ref = strip_types_unicode(user_ref['item'])
-        return identity.filter_user(user_ref)
+        return identity.filter_user(from_db(user_ref))
 
     def update_user(self, user_id, user):
-        if 'enabled' in user:
-            user['enabled'] = int(user['enabled'])
-        old_user = self._get_user(user_id)
-        new_user = utils.hash_user_password(user)
-
         if 'name' in user:
-            raise exception.ForbiddenAction()
-# Note Race condition here. One solution is to block username updates.
-            req = build_delete_req(USER_TABLE['user'].values(),
-                    [old_user['domain_id'], old_user['name']],
-                    USER_SCHEMA)
-            mdb.delete_item('user', req)
-            user_json = union_dicts(new_user, old_user)
-            req = build_user_create_req(user_json, USER_SCHEMA)
-            res = MDB.put_item('user', req)
-        else:
-            req = build_update_req(USER_TABLE['user'].values(),
-                    USER_SCHEMA, new_user, old_user)
+            user.pop('name')
+        #    raise exception.ForbiddenAction()
+        user = utils.hash_user_password(user)
+        old_user = to_db(self._get_user(user_id))
+        new_user = to_db(user)
+        req = build_update_req(USER_TABLE['user'].values(),
+        USER_SCHEMA, new_user, old_user, action={})
+        if req:
             res = MDB.update_item('user', req)
 
         req = build_update_req(USER_TABLE['user_id_index'].values(),
-                USER_SCHEMA, new_user, old_user)
-        req = append_return_values(req, 'ALL_NEW')
-        res = MDB.update_item('user_id_index', req)
-        return identity.filter_user(strip_types_unicode(res['attributes']))
+                USER_SCHEMA, new_user, old_user, action={})
+        if req:
+            res = MDB.update_item('user_id_index', req)
+        old_user.update(new_user)
+        return identity.filter_user(from_db(old_user))
 
     def delete_user(self, user_id):
         ref = self._get_user(user_id)
@@ -190,7 +228,7 @@ class Identity(identity.Driver):
         raise exception.ForbiddenAction()
 
     def list_groups(self, hints):
-        raise exception.ForbiddenAction()
+        return []
 
     def get_group(self, group_id):
         raise exception.ForbiddenAction()
