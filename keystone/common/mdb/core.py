@@ -27,14 +27,17 @@ def build_query_req(key, value, operators, table_schema):
         body['key_conditions'][key]['comparison_operator'] = op
     return body
 
-def build_scan_req(keys, values, operators, table_schema):
+def build_scan_req(keys, values, operators, table_schema, limit=None):
     body = {}
-    body['scan_filter'] = {}
-    for key, value, op in  zip(keys, values, operators):
-        body['scan_filter'][key] = {}
-        val_json = {table_schema[key]: value}
-        body['scan_filter'][key]['attribute_value_list'] = [val_json]
-        body['scan_filter'][key]['comparison_operator'] = op
+    if len(keys) == len(values) == len(operators):
+        body['scan_filter'] = {}
+        for key, value, op in  zip(keys, values, operators):
+            body['scan_filter'][key] = {}
+            val_json = {table_schema[key]: value}
+            body['scan_filter'][key]['attribute_value_list'] = [val_json]
+            body['scan_filter'][key]['comparison_operator'] = op
+    if limit is not None:
+        body['limit'] = limit
     return body
 
 def build_get_req(keys, values, table_schema):
