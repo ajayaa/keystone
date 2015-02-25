@@ -18,8 +18,7 @@ from keystone.i18n import _
 
 TABLES = {
     'role': {
-        'hash_key': 'id',
-        'range_key': 'name'
+        'hash_key': 'id'
     },
     'role_name_index': {
         'hash_key': 'name'
@@ -107,8 +106,8 @@ class Role(assignment.RoleDriver):
 
     def delete_role(self, role_id):
         role = self._get_role(role_id)
-        req = build_delete_req(TABLES['role'].values(), [role['id'],\
-                role['name']], SCHEMA['role'])
+        req = build_delete_req(TABLES['role'].values(), [role['id']],
+                SCHEMA['role'])
         res = MDB.delete_item('role', req)
         req = build_delete_req(TABLES['role_name_index'].values(),
                 [role['name']], SCHEMA['role_name_index'])
