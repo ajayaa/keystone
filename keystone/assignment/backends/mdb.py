@@ -68,7 +68,7 @@ MDB = Mdb().get_client()
 class Assignment(keystone_assignment.Driver):
 
     def default_role_driver(self):
-        return "keystone.assignment.role_backends.sql.Role"
+        return "keystone.assignment.role_backends.mdb.Role"
 
     def default_resource_driver(self):
         return 'keystone.resource.backends.sql.Resource'
@@ -275,14 +275,14 @@ class Assignment(keystone_assignment.Driver):
             return []
 
         roles = []
-        for actor in groups:
-            req = build_get_req(TABLES['asssignment'].values(), [actor,\
+        for actor in group_ids:
+            req = build_get_req(TABLES['assignment'].values(), [actor,\
                     project_id], SCHEMA['assignment'])
             res = MDB.get_item('assignment', req)
             if bool(res):
-                if res.has_key('role_ids'):
-                    if res['type']['S'] == 'GroupProject':
-                        roles.extend(item['role_ids']['SS'])
+                if res['item'].has_key('role_ids'):
+                    if res['item']['type']['S'] == 'GroupProject':
+                        roles.extend(res['item']['role_ids']['SS'])
         return roles
 
     def list_project_ids_for_groups(self, group_ids, hints,

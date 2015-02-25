@@ -159,10 +159,13 @@ class Identity(identity.Driver):
         user = to_db(user)
         put_user_json = build_create_req(user, SCHEMA['user'])
         tables = ['user', 'user_id_index']
-        for table in tables:
-            put_user_json = append_if_not_exists(put_user_json,\
-                    TABLES[table]['hash_key'])
-            MDB.put_item(table, put_user_json)
+        try:
+            for table in tables:
+                put_user_json = append_if_not_exists(put_user_json,\
+                        TABLES[table]['hash_key'])
+                MDB.put_item(table, put_user_json)
+        except Exception as e:
+           raise exception.Conflict(type='user', details=_('Duplicate Entry'))
         return identity.filter_user(from_db(user))
 
     def list_users(self, hints):
