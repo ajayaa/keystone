@@ -16,7 +16,7 @@ def strip_types_unicode(us):
         dict[k] = v.values()[0].encode('ascii')
     return dict
 
-def build_query_req(key, value, operators, table_schema):
+def build_query_req(key, value, operators, table_schema, attr_to_get=None):
     body = {}
     body['consistent_read'] = True
     body['key_conditions'] = {}
@@ -25,6 +25,8 @@ def build_query_req(key, value, operators, table_schema):
         val_json = {table_schema[key]: value}
         body['key_conditions'][key]['attribute_value_list'] = [val_json]
         body['key_conditions'][key]['comparison_operator'] = op
+    if attr_to_get is not None:
+        body['attributes_to_get'] = attr_to_get
     return body
 
 def build_scan_req(keys, values, operators, table_schema, limit=None):

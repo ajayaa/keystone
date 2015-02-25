@@ -34,7 +34,15 @@ TABLES = {
         'range_key': 'name'
     },
     'group_id_index': {
-        'hask_key': 'group_id'
+        'hash_key': 'id'
+    },
+    'user_group': {
+        'hash_key': 'user_id',
+        'range_key': 'group_id'
+    },
+    'group_user': {
+        'hash_key': 'group_id',
+        'range_key': 'user_id'
     }
 }
 
@@ -48,12 +56,37 @@ SCHEMA = {
         'domain_id': 'S',
         'default_project_id': 'S'
     },
+    'user_id_index': {
+        'id': 'S',
+        'name': 'S',
+        'password': 'S',
+        'extra': 'S',
+        'enabled': 'N',
+        'domain_id': 'S',
+        'default_project_id': 'S'
+    },
+
     'group': {
         'id': 'S',
         'name': 'S',
         'domain_id': 'S',
         'extra': 'S',
         'description': 'S'
+    },
+    'group_id_index': {
+        'id': 'S',
+        'name': 'S',
+        'domain_id': 'S',
+        'extra': 'S',
+        'description': 'S'
+    },
+    'user_group': {
+        'user_id': 'S',
+        'group_id': 'S'
+    },
+    'group_user': {
+        'group_id': 'S',
+        'user_id': 'S'
     }
 }
 
@@ -225,36 +258,146 @@ class Identity(identity.Driver):
 
     # group crud
     def add_user_to_group(self, user_id, group_id):
-        raise exception.ForbiddenAction()
+        d = {'user_id': user_id, 'group_id': group_id}
+        put_req = build_create_req(d, SCHEMA['user_group'])
+        tables = ['user_group', 'group_user']
+        for table in tables:
+            MDB.put_item(table, put_req)
 
     def check_user_in_group(self, user_id, group_id):
-        raise exception.ForbiddenAction()
+        d = {'user_id': user_id, 'group_id': group_id}
+        req = build_get_req(TABLES['user_group'].values(),
+                [user_id, group_id], SCHEMA['user_group'])
+        res = MDB.get_item('user_group', req)
+        if not res:
+            raise exception.NotFound(_("User '%(user_id)s' not found in"
+                                       " group '%(group_id)s'") %
+                                     {'user_id': user_id,
+                                      'group_id': group_id})
 
     def remove_user_from_group(self, user_id, group_id):
-        raise exception.ForbiddenAction()
+        req = build_delete_req(TABLES['user_group'].values(),
+                [user_id, group_id], SCHEMA['user_group'])
+        try:
+            res = MDB.delete_item('user_group', req)
+        except e:
+            raise exception.NotFound(_("User '%(user_id)s' not found in"
+                                       " group '%(group_id)s'") %
+                                     {'user_id': user_id,
+                                      'group_id': group_id})
+        req = build_delete_req(TABLES['group_user'].values(),
+                [group_id, user_id], SCHEMA['group_user'])
+        MDB.delete_item('group_user', req)
 
     def list_groups_for_user(self, user_id, hints):
-        # When an user is authenticated his groups are also listed.
-        # So this work-around.
-        return {}
+        req = build_query_req([TABLES['user_group']['hash_key']],
+                [user_id], ['EQ'], SCHEMA['user_group'],
+                attr_to_get=['group_id'])
+        group_refs = MDB.query('user_group', req)
+        groups = [strip_types_unicode(x) for x in group_refs['items']]
+        full_groups = []
+        for group in groups:
+            gr = self.get_group(group['group_id'])
+            full_groups.append(gr)
+        return full_groups
 
     def list_users_in_group(self, group_id, hints):
-        raise exception.ForbiddenAction()
+        req = build_query_req([TABLES['group_user']['hash_key']],
+                [group_id], ['EQ'], SCHEMA['group_user'],
+                attr_to_get=['user_id'])
+        user_refs = MDB.query('group_user', req)
+        users = [strip_types_unicode(x) for x in user_refs['items']]
+        full_users = []
+        for user in users:
+            us = self._get_user(user['user_id'])
+            full_users.append(us)
+        return full_users
+
 
     def create_group(self, group_id, group):
-        raise exception.ForbiddenAction()
+        put_group_json = build_create_req(group, SCHEMA['group'])
+        tables = ['group', 'group_id_index']
+        for table in tables:
+            put_group_json = append_if_not_exists(put_group_json,
+                    TABLES[table]['hash_key'])
+            MDB.put_item(table, put_group_json)
+        group = dict((k, v) for k, v in group.iteritems() if v)
+        return group
 
     def list_groups(self, hints):
-        return []
+        domain = None
+        filter_keys = []
+        filter_values = []
+        for filt in hints.filters:
+            if filt['name'] == 'domain_id':
+                domain = filt['value']
+            else:
+                filter_keys.append(filt['name'])
+                filter_values.append(filt['value'])
+        group_ref = None
+        if domain is not None:
+            table_to_query = TABLES['group']
+            req = build_query_req([TABLES['group']['hash_key']], [domain], ['EQ'],\
+                    SCHEMA['group'])
+            group_refs = MDB.query('group', req)
+        else:
+            #work around because of bug #142358
+            ops = ['EQ'] * len(filter_keys)
+            req = build_scan_req(filter_keys, filter_values, ops,
+                    SCHEMA['group'], limit=100000)
+            group_refs = MDB.scan('group', req)
+        groups = [from_db(strip_types_unicode(x)) for x in group_refs['items']]
+        return groups
 
     def get_group(self, group_id):
-        raise exception.ForbiddenAction()
+        table_to_query = TABLES['group_id_index']
+        req = build_query_req([table_to_query['hash_key']], [group_id], ['EQ'],\
+                SCHEMA['group_id_index'])
+
+        group_ref = MDB.query('group_id_index', req)
+        if group_ref['count'] == 0:
+            raise exception.GroupNotFound(group_id=group_id)
+        elif group_ref['count'] != 1:
+            raise Exception("More than one group with same id")
+        else:
+            group_ref = strip_types_unicode(group_ref['items'][0])
+        return group_ref
 
     def get_group_by_name(self, group_name, domain_id):
-        raise exception.ForbiddenAction()
+        table_to_query = TABLES['group']
+        req = build_get_req(table_to_query.values(), [domain_id, group_name],
+                SCHEMA['group'])
+        group_ref = MDB.get_item('group', req)
+        if not group_ref:
+            raise exception.GroupNotFound(group_name=group_name)
+        group_ref = strip_types_unicode(group_ref['item'])
+        return group_ref
 
     def update_group(self, group_id, group):
-        raise exception.ForbiddenAction()
+        if 'name' in group:
+            group.pop('name')
+            #raise exception.ForbiddenAction()
+        old_group = self.get_group(group_id)
+        new_group = group
+        req = build_update_req(TABLES['group'].values(),SCHEMA['group'],
+                new_group, old_group, action={})
+        if req:
+            res = MDB.update_item('group', req)
+
+        req = build_update_req(TABLES['group_id_index'].values(),
+                SCHEMA['group_id_index'], new_group, old_group, action={})
+        if req:
+            res = MDB.update_item('group_id_index', req)
+        old_group.update(new_group)
+        return old_group
 
     def delete_group(self, group_id):
-        raise exception.ForbiddenAction()
+        ref = self.get_group(group_id)
+        domain_id = ref['domain_id']
+        name = ref['name']
+        req = build_delete_req(TABLES['group'].values(), [domain_id,\
+                name], SCHEMA['group'])
+        MDB.delete_item('group', req)
+        req = build_delete_req(TABLES['group_id_index'].values(),
+                [group_id], SCHEMA['group_id_index'])
+        MDB.delete_item('group_id_index', req)
