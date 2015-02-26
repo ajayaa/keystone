@@ -93,6 +93,7 @@ SCHEMA = {
 MDB = Mdb().get_client()
 
 def to_db(user):
+    user = dict((k, v) for k, v in user.iteritems() if v)
     if user.has_key('enabled'):
         user['enabled'] = int(user['enabled'])
     extra = {}

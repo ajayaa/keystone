@@ -10,6 +10,7 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+import json
 from keystone import clean
 from keystone.common import sql
 from keystone import config
@@ -59,13 +60,13 @@ SCHEMA = {
     },
     'domain': {
         'id': 'S',
-        'enabled': 'N',
+        'enabled': 'S',
         'name': 'S',
         'extra': 'S'
     },
     'domain_name_index': {
         'name': 'S',
-        'enabled': 'N',
+        'enabled': 'S',
         'id': 'S',
         'extra': 'S'
     }
@@ -74,25 +75,40 @@ SCHEMA = {
 MDB = Mdb().get_client()
 
 def to_db(d, typ):
-    d = dict((k, v) for k, v in d.iteritems() if v)
-    if d.has_key('enabled'):
-        d['enabled'] = int(d['enabled'])
+    d = dict((k, v) for k, v in d.iteritems() if v is not None)
     if typ == 'project':
+        if d.has_key('enabled'):
+            d['enabled'] = int(d['enabled'])
         return d
     elif typ == 'domain':
+        if d.has_key('enabled'):
+            d['enabled'] = str(int(d['enabled']))
+        extra = {}
+        if d.has_key('description'):
+            extra['description'] = d['description']
+            d.pop('description')
+        d['extra'] = json.dumps(extra)
         return d
 
 def from_db(d, typ):
-    if d.has_key('enabled'):
-        d['enabled'] = bool(d['enabled'])
     if typ == 'project':
+        if d.has_key('enabled'):
+            d['enabled'] = bool(d['enabled'])
         for col in SCHEMA['project'].keys():
             if col != 'extra':
                 if not d.has_key(col):
                     d[col] = None
         return d
-    elif typ=='domain':
-        return d
+    elif typ == 'domain':
+         if d.has_key('enabled'):
+            d['enabled'] = bool(int(d['enabled']))
+         if d.has_key('extra'):
+            d['extra'] = json.loads(d['extra'])
+            d.update(d['extra'])
+            d.pop('extra')
+         if not d.has_key('description'):
+             d['description'] = None
+         return d
 
 
 class Resource(keystone_resource.Driver):
@@ -238,76 +254,95 @@ class Resource(keystone_resource.Driver):
         MDB.delete_item('project_id_index', req)
 
     # domain crud
-    @sql.handle_conflicts(conflict_type='domain')
-    def create_domain(self, domain_id, domain):
-        with sql.transaction() as session:
-            ref = Domain.from_dict(domain)
-            session.add(ref)
-        return ref.to_dict()
 
-    @sql.truncated
+    def create_domain(self, domain_id, domain):
+        domain = to_db(domain, 'domain')
+        req = build_create_req(domain, SCHEMA['domain_name_index'])
+        req = append_if_not_exists(req, TABLES['domain_name_index']['hash_key'])
+        try:
+            MDB.put_item('domain_name_index', req)
+        except Exception as e:
+            raise exception.Conflict(type='domain', details=_('Duplicate Entry'))
+        put_domain_json = build_create_req(domain, SCHEMA['domain'])
+        put_domain_json = append_if_not_exists(put_domain_json,
+                TABLES['domain']['hash_key'])
+        MDB.put_item('domain', put_domain_json)
+        return from_db(domain, 'domain')
+
     def list_domains(self, hints):
-        with sql.transaction() as session:
-            query = session.query(Domain)
-            refs = sql.filter_limit_query(Domain, query, hints)
-            return [ref.to_dict() for ref in refs]
+        filter_keys = []
+        filter_values = []
+        for filt in hints.filters:
+            filter_keys.append(filt['name'])
+            filter_values.append(filt['value'])
+
+        ops = ['EQ'] * len(filter_keys)
+        req = build_scan_req(filter_keys, filter_values, ops,
+                SCHEMA['domain'], limit=100000)
+        domain_refs = MDB.scan('domain', req)
+        domains = [from_db(strip_types_unicode(x), 'domain') for x in 
+                domain_refs['items']]
+        return domains
 
     def list_domains_from_ids(self, ids):
         if not ids:
             return []
         else:
-            with sql.transaction() as session:
-                query = session.query(Domain)
-                query = query.filter(Domain.id.in_(ids))
-                domain_refs = query.all()
-                return [domain_ref.to_dict() for domain_ref in domain_refs]
+            domains = []
+            for domain_id in ids:
+                domains.append(self._get_domain(domain_id))
+            return domains
 
-    def _get_domain(self, session, domain_id):
-        ref = session.query(Domain).get(domain_id)
-        if ref is None:
+    def _get_domain(self, domain_id):
+        req = build_query_req([TABLES['domain']['hash_key']], [domain_id], ['EQ'],
+                    SCHEMA['domain'])
+        res = MDB.query('domain', req)
+        if res['count'] == 0:
             raise exception.DomainNotFound(domain_id=domain_id)
-        return ref
+        elif res['count'] > 1:
+            raise Exception('more than one domain with same id')
+        res = res['items'][0]
+        res = strip_types_unicode(res)
+        return from_db(res, 'domain')
 
     def get_domain(self, domain_id):
-        with sql.transaction() as session:
-            return self._get_domain(session, domain_id).to_dict()
+        return self._get_domain(domain_id)
 
     def get_domain_by_name(self, domain_name):
-        with sql.transaction() as session:
-            try:
-                ref = (session.query(Domain).
-                       filter_by(name=domain_name).one())
-            except sql.NotFound:
-                raise exception.DomainNotFound(domain_id=domain_name)
-            return ref.to_dict()
+        req = build_query_req([TABLES['domain_name_index']['hash_key']],
+                [domain_name], ['EQ'], SCHEMA['domain_name_index'])
+        res = MDB.query('domain_name_index', req)
+        if res['count'] == 0:
+            raise exception.DomainNotFound(domain_id=domain_id)
+        elif res['count'] > 1:
+            raise Exception('more than one domain with same id')
+        res = res['items'][0]
+        res = strip_types_unicode(res)
+        return from_db(res, 'domain')
 
-    @sql.handle_conflicts(conflict_type='domain')
     def update_domain(self, domain_id, domain):
-        with sql.transaction() as session:
-            ref = self._get_domain(session, domain_id)
-            old_dict = ref.to_dict()
-            for k in domain:
-                old_dict[k] = domain[k]
-            new_domain = Domain.from_dict(old_dict)
-            for attr in Domain.attributes:
-                if attr != 'id':
-                    setattr(ref, attr, getattr(new_domain, attr))
-            ref.extra = new_domain.extra
-            return ref.to_dict()
+        if 'name' in domain:
+           domain.pop('name')
+        domain = to_db(domain, 'domain')
+        old_domain = self._get_domain(domain_id)
+        old_domain = to_db(old_domain, 'domain')
+        req = build_update_req(TABLES['domain'].values(), SCHEMA['domain'],
+                domain, old_domain, action={})
+        if req:
+            res = MDB.update_item('domain', req)
+        req = build_update_req(TABLES['domain_name_index'].values(),
+                SCHEMA['domain_name_index'], domain, old_domain, action={})
+        if res:
+            res = MDB.update_item('domain_name_index', req)
+        old_domain.update(domain)
+        return from_db(old_domain, 'domain')
 
     def delete_domain(self, domain_id):
-        with sql.transaction() as session:
-            ref = self._get_domain(session, domain_id)
-            session.delete(ref)
-
-
-class Domain(sql.ModelBase, sql.DictBase):
-    __tablename__ = 'domain'
-    attributes = ['id', 'name', 'enabled']
-    id = sql.Column(sql.String(64), primary_key=True)
-    name = sql.Column(sql.String(64), nullable=False)
-    enabled = sql.Column(sql.Boolean, default=True, nullable=False)
-    extra = sql.Column(sql.JsonBlob())
-    __table_args__ = (sql.UniqueConstraint('name'), {})
-
-
+        domain = self._get_domain(domain_id)
+        domain = to_db(domain, 'domain')
+        req = build_delete_req(TABLES['domain'].values(), [domain['id']],
+                SCHEMA['domain'])
+        res = MDB.delete_item('domain', req)
+        req = build_delete_req(TABLES['domain_name_index'].values(),
+                [domain['name']], SCHEMA['domain_name_index'])
+        res = MDB.delete_item('domain_name_index', req)
