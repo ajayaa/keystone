@@ -43,7 +43,7 @@ class DomainIdUserNameToUserId(Model):
     name = columns.Text(primary_key=True, max_length=255)
     user_id = columns.Text(max_length=64)
 
-class Group(Model):
+class Group(cassandra.ExtrasModel):
     __table_name__ = 'group'
     id = columns.Text(primary_key=True, max_length=64)
     name = columns.Text(max_length=64)
@@ -230,79 +230,68 @@ class Identity(identity.Driver):
         return [identity.filter_user(u.to_dict()) for u in query]
 
     def delete_user(self, user_id):
-        session = sql.get_session()
-
-        with session.begin():
-            ref = self._get_user(session, user_id)
-
-            q = session.query(UserGroupMembership)
-            q = q.filter_by(user_id=user_id)
-            q.delete(False)
-
-            session.delete(ref)
+        user_ref = self._get_user(user_id)
+        User(id=user_id).delete()
+        DomainIdUserNameToUserId(
+                user_id=user_ref.user_id,
+                name=user_ref.name)
 
     # group crud
 
-    @sql.handle_conflicts(conflict_type='group')
+    #@sql.handle_conflicts(conflict_type='group')
     def create_group(self, group_id, group):
-        session = sql.get_session()
-        with session.begin():
-            ref = Group.from_dict(group)
-            session.add(ref)
+        group_create_dict = Group.get_model_dict(group)
+        # TODO: check  if 'group' var has 'id', else take from group_id
+        ref = Group.create(**group_create_dict)
+
+        mapping_create_dict = {
+                'domain_id': group['domain_id'],
+                'name': group['name'],
+                'group_id': group_id,
+        }
+        DomainIdGroupNameToGroupId.create(**mapping_create_dict)
+
         return ref.to_dict()
 
     @sql.truncated
     def list_groups(self, hints):
-        session = sql.get_session()
-        query = session.query(Group)
-        refs = sql.filter_limit_query(Group, query, hints)
+        # TODO(rushiagr): use the hints!
+        refs = Group.objects.all()
         return [ref.to_dict() for ref in refs]
 
-    def _get_group(self, session, group_id):
-        ref = session.query(Group).get(group_id)
-        if not ref:
+    def _get_group(self, group_id):
+        try:
+            ref = Group.get(id=group_id)
+        except DoesNotExist:
             raise exception.GroupNotFound(group_id=group_id)
         return ref
 
     def get_group(self, group_id):
-        session = sql.get_session()
-        return self._get_group(session, group_id).to_dict()
+        return self._get_group(group_id).to_dict()
 
     def get_group_by_name(self, group_name, domain_id):
-        session = sql.get_session()
-        query = session.query(Group)
-        query = query.filter_by(name=group_name)
-        query = query.filter_by(domain_id=domain_id)
         try:
-            group_ref = query.one()
-        except sql.NotFound:
+            mapping_ref = DomainIdGroupNameToGroupId.get(domain_id=domain_id,
+                name=group_name)
+            group_ref = Group.get(mapping_ref.group_id)
+            return group_ref.to_dict()
+        except DoesNotExist:
             raise exception.GroupNotFound(group_id=group_name)
+
+    #@sql.handle_conflicts(conflict_type='group')
+    def update_group(self, group_id, group):
+        group_ref = self._get_group(group_id)
+        if 'name' in group and group_ref.name != group['name']:
+            raise exception.ForbiddenAction(message='Name cannot be updated')
+        if 'domain_id' in group and group_ref.domain_id != group['domain_id']:
+            raise exception.ForbiddenAction(message='Domain cannot be updated')
+        group_update_dict = group_ref.to_dict()
+        Group.objects(id=group_id).update(**group_update_dict)
         return group_ref.to_dict()
 
-    @sql.handle_conflicts(conflict_type='group')
-    def update_group(self, group_id, group):
-        session = sql.get_session()
-
-        with session.begin():
-            ref = self._get_group(session, group_id)
-            old_dict = ref.to_dict()
-            for k in group:
-                old_dict[k] = group[k]
-            new_group = Group.from_dict(old_dict)
-            for attr in Group.attributes:
-                if attr != 'id':
-                    setattr(ref, attr, getattr(new_group, attr))
-            ref.extra = new_group.extra
-        return ref.to_dict()
-
     def delete_group(self, group_id):
-        session = sql.get_session()
-
-        with session.begin():
-            ref = self._get_group(session, group_id)
-
-            q = session.query(UserGroupMembership)
-            q = q.filter_by(group_id=group_id)
-            q.delete(False)
-
-            session.delete(ref)
+        group_ref = self._get_group(group_id)
+        Group(id=group_id).delete()
+        DomainIdGroupNameToGroupId(
+                domain_id=group_ref.domain_id,
+                name=group_ref.name)
