@@ -234,7 +234,7 @@ class Identity(identity.Driver):
         User(id=user_id).delete()
         DomainIdUserNameToUserId(
                 user_id=user_ref.user_id,
-                name=user_ref.name)
+                name=user_ref.name).delete()
 
     # group crud
 
@@ -294,4 +294,4 @@ class Identity(identity.Driver):
         Group(id=group_id).delete()
         DomainIdGroupNameToGroupId(
                 domain_id=group_ref.domain_id,
-                name=group_ref.name)
+                name=group_ref.name).delete()
