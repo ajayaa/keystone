@@ -22,6 +22,7 @@ To create keyspace by name keystone:
 from cqlengine.models import Model, ModelMetaClass
 
 import functools
+import json
 
 from keystone import exception
 
@@ -35,9 +36,18 @@ class ExtrasModel(Model):
     __abstract__ = True
 
     @classmethod
-    def get_model_dict(cls, d):
+    def get_model_dict(cls, d, extras_table=True):
+        # 'extras_table' is for working with tables which doesn't have extras
+        # magic. For such tables, just pass extras_table=False
         new_dict = d.copy()
-        new_dict['extra'] = str(dict((k, new_dict.pop(k)) for k in six.iterkeys(d)
+
+        if not extras_table:
+            for k in new_dict.keys():
+                if k not in cls._columns:
+                    new_dict.pop(k)
+            return new_dict
+
+        new_dict['extra'] = json.dumps(dict((k, new_dict.pop(k)) for k in six.iterkeys(d)
                                 if k not in cls._columns and k != 'extra'))
         return new_dict
 
@@ -45,6 +55,8 @@ class ExtrasModel(Model):
         model_dict = {}
         for k, v in zip(self.keys(), self.values()):
             model_dict[k] = v
+        if 'extra' in model_dict.keys():
+            model_dict['extra'] = json.loads(model_dict['extra'])
         return model_dict
 
 

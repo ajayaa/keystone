@@ -37,7 +37,7 @@ class User(cassandra.ExtrasModel):
     extra = columns.Text()
     default_project_id = columns.Text(max_length=64)
 
-class DomainIdUserNameToUserId(Model):
+class DomainIdUserNameToUserId(cassandra.ExtrasModel):
     __table_name__ = 'domain_id_user_name_to_user_id'
     domain_id = columns.Text(primary_key=True, max_length=64)
     name = columns.Text(primary_key=True, max_length=255)
@@ -51,18 +51,18 @@ class Group(cassandra.ExtrasModel):
     description = columns.Text()
     extra = columns.Text()
 
-class DomainIdGroupNameToGroupId(Model):
+class DomainIdGroupNameToGroupId(cassandra.ExtrasModel):
     __table_name__ = 'domain_id_group_name_to_group_id'
     domain_id = columns.Text(primary_key=True, max_length=64)
     name = columns.Text(primary_key=True, max_length=64)
     group_id = columns.Text(max_length=64)
 
-class UserGroups(Model):
+class UserGroups(cassandra.ExtrasModel):
     __table_name__ = 'user_groups'
     user_id = columns.Text(primary_key=True, max_length=64)
     group_id = columns.Text(primary_key=True, clustering_order="DESC", max_length=64)
 
-class GroupMembership(Model):
+class GroupMembership(cassandra.ExtrasModel):
     __table_name__ = 'group_users'
     group_id = columns.Text(primary_key=True, max_length=64)
     user_id = columns.Text(primary_key=True, clustering_order="DESC", max_length=64)
@@ -104,7 +104,7 @@ class Identity(identity.Driver):
     def authenticate(self, user_id, password):
         user_ref = None
         try:
-            self._get_user(user_id)
+            user_ref = self._get_user(user_id)
         except exception.UserNotFound:
             raise AssertionError(_('Invalid user / password'))
         if not self._check_password(password, user_ref):
@@ -116,14 +116,15 @@ class Identity(identity.Driver):
     def create_user(self, user_id, user):
         mapping_dict = user
         mapping_dict['user_id'] = user['id']
-        mapping_ref = DomainIdUserNameToUserId.get_model_dict(mapping_dict)
+        mapping_ref = DomainIdUserNameToUserId.get_model_dict(mapping_dict,
+                extras_table=False)
         DomainIdUserNameToUserId.create(**mapping_ref)
 
         user = utils.hash_user_password(user)
         user_model_dict = User.get_model_dict(user)
         user_ref = User.create(**user_model_dict)
-
-        return identity.filter_user(user_ref.to_dict())
+        user_dict = user_ref.to_dict()
+        return identity.filter_user(user_dict)
 
 
     @cassandra.truncated
@@ -250,7 +251,7 @@ class Identity(identity.Driver):
         user_ref = self._get_user(user_id)
         User(id=user_id).delete()
         DomainIdUserNameToUserId(
-                user_id=user_ref.user_id,
+                domain_id=user_ref.domain_id,
                 name=user_ref.name).delete()
 
     # group crud
@@ -270,7 +271,7 @@ class Identity(identity.Driver):
 
         return ref.to_dict()
 
-    @sql.truncated
+    @cassandra.truncated
     def list_groups(self, hints):
         # TODO(rushiagr): use the hints!
         refs = Group.objects.all()
