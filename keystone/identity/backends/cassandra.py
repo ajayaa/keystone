@@ -205,16 +205,26 @@ class Identity(identity.Driver):
                                       'group_id': group_id})
 
     def list_groups_for_user(self, user_id, hints):
+        # TODO(blah) use the hints
+        results = UserGroups.objects.filter(user_id=user_id)
+        groups = []
+        for result in results:
+            gid = result.group_id
+            gid_ref = Group.get(id=gid)
+            groups.append(gid_ref.to_dict())
+
+        return groups
+
         # TODO(henry-nash) We could implement full filtering here by enhancing
         # the join below.  However, since it is likely to be a fairly rare
         # occurrence to filter on more than the user_id already being used
         # here, this is left as future enhancement and until then we leave
         # it for the controller to do for us.
-        session = sql.get_session()
-        self.get_user(user_id)
-        query = session.query(Group).join(UserGroupMembership)
-        query = query.filter(UserGroupMembership.user_id == user_id)
-        return [g.to_dict() for g in query]
+        # session = sql.get_session()
+        # self.get_user(user_id)
+        # query = session.query(Group).join(UserGroupMembership)
+        # query = query.filter(UserGroupMembership.user_id == user_id)
+        # return [g.to_dict() for g in query]
 
     def list_users_in_group(self, group_id, hints):
         # TODO(henry-nash) We could implement full filtering here by enhancing
@@ -222,12 +232,19 @@ class Identity(identity.Driver):
         # occurrence to filter on more than the group_id already being used
         # here, this is left as future enhancement and until then we leave
         # it for the controller to do for us.
-        session = sql.get_session()
-        self.get_group(group_id)
-        query = session.query(User).join(UserGroupMembership)
-        query = query.filter(UserGroupMembership.group_id == group_id)
+        # session = sql.get_session()
+        # self.get_group(group_id)
+        # query = session.query(User).join(UserGroupMembership)
+        # query = query.filter(UserGroupMembership.group_id == group_id)
+        results = GroupMembership.objects.filter(group_id=group_id)
+        users = []
+        for result in results:
+            uid = result.user_id
+            uid_ref = User.get(id=uid)
+            users.append(identity.filter(uid_ref.to_dict()))
 
-        return [identity.filter_user(u.to_dict()) for u in query]
+        return users
+        # return [identity.filter_user(u.to_dict()) for u in query]
 
     def delete_user(self, user_id):
         user_ref = self._get_user(user_id)
