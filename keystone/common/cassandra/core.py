@@ -57,6 +57,8 @@ class ExtrasModel(Model):
             model_dict[k] = v
         if 'extra' in model_dict.keys():
             model_dict['extra'] = json.loads(model_dict['extra'])
+        for k, v in model_dict['extra'].items():
+            model_dict[k] = v
         return model_dict
 
 
