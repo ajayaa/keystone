@@ -47,11 +47,11 @@ class Credential(credential.Driver):
     @cassandra.truncated
     def list_credentials(self, hints):
         refs = CredentialModel.objects()
-        return [cassandra.to_dict(ref) for ref in refs]
+        return [ref.to_dict() for ref in refs]
 
     def list_credentials_for_user(self, user_id):
         refs = CredentialModel.objects.filter(user_id=user_id)
-        return [cassandra.to_dict(ref) for ref in refs]
+        return [ref.to_dict() for ref in refs]
 
     def _get_credential(self, credential_id):
         refs = CredentialModel.objects.filter(id=credential_id)
@@ -60,16 +60,18 @@ class Credential(credential.Driver):
         return refs[0]
 
     def get_credential(self, credential_id):
-        return cassandra.to_dict(self._get_credential(credential_id))
+        return self._get_credential(credential_id).to_dict()
 
     def update_credential(self, credential_id, credential):
         ref = self._get_credential(credential_id)
-        ref_dict = cassandra.to_dict(ref)
+        ref_dict = ref.to_dict()
         for key in credential:
             ref_dict[key] = credential[key]
-        ref_id = ref_dict.pop(id)
-        ref.objects(id=ref_id).update(ref_dict)
-        return ref
+        ref_id = ref_dict.pop('id')
+        model_dict = CredentialModel.get_model_dict(ref_dict)
+        ref.objects(id=ref_id).update(**model_dict)
+        model_dict['id'] = ref_id
+        return model_dict
 
     def delete_credential(self, credential_id):
         ref = self._get_credential(credential_id).delete()
