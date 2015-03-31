@@ -166,6 +166,7 @@ class Identity(identity.Driver):
         if 'domain_id' in user and user_ref.domain_id != user['domain_id']:
             raise exception.ForbiddenAction(message='domain cannot be updated')
 
+        user = utils.hash_user_password(user)
         user_dict = User.get_model_dict(user)
         User.objects(id=user_id).update(**user_dict)
         user_ref = self._get_user(user_id)
