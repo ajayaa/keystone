@@ -59,6 +59,9 @@ class ExtrasModel(Model):
             model_dict['extra'] = json.loads(model_dict['extra'])
         for k, v in model_dict['extra'].items():
             model_dict[k] = v
+        if self.__class__.__name__ == 'User':
+            if 'default_project_id' in model_dict and model_dict['default_project_id'] is None:
+                del model_dict['default_project_id']
         return model_dict
 
 
