@@ -179,6 +179,10 @@ class Identity(identity.Driver):
             GroupMembership.get(group_id=group_id, user_id=user_id)
         except DoesNotExist:
             GroupMembership.create(group_id=group_id, user_id=user_id)
+        try:
+            UserGroups.get(user_id=user_id, group_id=group_id)
+        except DoesNotExist:
+            UserGroups.create(user_id=user_id, group_id=group_id)
 
     def check_user_in_group(self, user_id, group_id):
         self.get_group(group_id)
@@ -199,6 +203,15 @@ class Identity(identity.Driver):
         membership_ref = None
         try:
             membership_ref = GroupMembership.get(group_id=group_id, user_id=user_id)
+            membership_ref.delete()
+        except DoesNotExist:
+            raise exception.NotFound(_("User '%(user_id)s' not found in"
+                                       " group '%(group_id)s'") %
+                                      {'user_id': user_id,
+                                      'group_id': group_id})
+
+        try:
+            membership_ref = UserGroups.get(user_id=user_id, group_id=group_id)
             membership_ref.delete()
         except DoesNotExist:
             raise exception.NotFound(_("User '%(user_id)s' not found in"
@@ -243,7 +256,7 @@ class Identity(identity.Driver):
         for result in results:
             uid = result.user_id
             uid_ref = User.get(id=uid)
-            users.append(identity.filter(uid_ref.to_dict()))
+            users.append(identity.filter_user(uid_ref.to_dict()))
 
         return users
         # return [identity.filter_user(u.to_dict()) for u in query]
@@ -304,8 +317,10 @@ class Identity(identity.Driver):
             raise exception.ForbiddenAction(message='Name cannot be updated')
         if 'domain_id' in group and group_ref.domain_id != group['domain_id']:
             raise exception.ForbiddenAction(message='Domain cannot be updated')
-        group_update_dict = group_ref.to_dict()
-        Group.objects(id=group_id).update(**group_update_dict)
+
+        updated_dict = Group.get_model_dict(group)
+        Group.objects(id=group_id).update(**updated_dict)
+        group_ref = self._get_group(group_id)
         return group_ref.to_dict()
 
     def delete_group(self, group_id):
