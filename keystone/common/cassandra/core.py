@@ -56,7 +56,7 @@ class ExtrasModel(Model):
         for k, v in zip(self.keys(), self.values()):
             model_dict[k] = v
 
-        if self.__class__.__name__ = 'RoleAssignment':
+        if self.__class__.__name__ == 'RoleAssignment':
             return model_dict
 
         if 'extra' in model_dict.keys():

@@ -21,15 +21,15 @@ from keystone.common import cassandra
 from keystone import exception
 
 #from keystone.common import sql
-#from keystone import config
-#from keystone.i18n import _
-#from keystone.openstack.common import log
+from keystone import config
+from keystone.i18n import _
+from keystone.openstack.common import log
 
 from cqlengine import columns
 from cqlengine import connection
 from cqlengine import BatchQuery
 from cqlengine.management import sync_table
-from cqlengine.query import BatchType
+from cqlengine.query import BatchType, DoesNotExist
 
 
 CONF = config.CONF
@@ -77,9 +77,10 @@ class Assignment(keystone_assignment.Driver):
 
         # NOT checking distinctness
         refs = RoleAssignment.objects.filter(
-                type=AssignmentType.USER_PROJECT,
+                #type=AssignmentType.USER_PROJECT,
                 target_id=tenant_id)
-        return [ref.actor_id for ref in refs]
+        return [ref.actor_id for ref in refs if
+                ref.type==AssignmentType.USER_PROJECT]
 
     def _get_metadata(self, user_id=None, tenant_id=None,
                       domain_id=None, group_id=None, session=None):
@@ -254,47 +255,82 @@ class Assignment(keystone_assignment.Driver):
 
     def list_domain_ids_for_user(self, user_id, group_ids, hints,
                                  inherited=False):
-        # TODO TODO TODO TODO Start from here
-        with sql.transaction() as session:
-            query = session.query(RoleAssignment.target_id)
-            filters = []
+        # 'domain_ids is a dictionary, where keys are domain IDs, and values
+        # are empty strings. Using dictionary for uniqueness
+        domain_ids = {}
 
-            if user_id:
-                #sql_constraints = sqlalchemy.and_(
-                #    RoleAssignment.actor_id == user_id,
-                #    RoleAssignment.inherited == inherited,
-                #    RoleAssignment.type == AssignmentType.USER_DOMAIN)
-                #filters.append(sql_constraints)
+        if user_id:
+            refs = RoleAssignment.objects.filter(
+                    actor_id=user_id,
+                    inherited=inherited,
+                    type=AssignmentType.USER_DOMAIN)
+            for ref in refs:
+                domain_ids[ref.target_id] = ''
 
-            if group_ids:
-                sql_constraints = sqlalchemy.and_(
-                    RoleAssignment.actor_id.in_(group_ids),
-                    RoleAssignment.inherited == inherited,
-                    RoleAssignment.type == AssignmentType.GROUP_DOMAIN)
-                filters.append(sql_constraints)
+        if group_ids:
+            refs = RoleAssignment.objects.filter(
+                    actor_id__in=group_ids,
+                    inherited=inherited,
+                    type=AssignmentType.GROUP_DOMAIN)
+            for ref in refs:
+                domain_ids[ref.target_id] = ''
 
-            if not filters:
-                return []
+        return domain_ids.keys()
 
-            query = query.filter(sqlalchemy.or_(*filters)).distinct()
+        #with sql.transaction() as session:
+        #    query = session.query(RoleAssignment.target_id)
+        #    filters = []
 
-            return [assignment.target_id for assignment in query.all()]
+        #    if user_id:
+        #        sql_constraints = sqlalchemy.and_(
+        #            RoleAssignment.actor_id == user_id,
+        #            RoleAssignment.inherited == inherited,
+        #            RoleAssignment.type == AssignmentType.USER_DOMAIN)
+        #        filters.append(sql_constraints)
+
+        #    if group_ids:
+        #        sql_constraints = sqlalchemy.and_(
+        #            RoleAssignment.actor_id.in_(group_ids),
+        #            RoleAssignment.inherited == inherited,
+        #            RoleAssignment.type == AssignmentType.GROUP_DOMAIN)
+        #        filters.append(sql_constraints)
+
+        #    if not filters:
+        #        return []
+
+        #    query = query.filter(sqlalchemy.or_(*filters)).distinct()
+
+        #    return [assignment.target_id for assignment in query.all()]
 
     def list_role_ids_for_groups_on_domain(self, group_ids, domain_id):
         if not group_ids:
             # If there's no groups then there will be no domain roles.
             return []
 
-        sql_constraints = sqlalchemy.and_(
-            RoleAssignment.type == AssignmentType.GROUP_DOMAIN,
-            RoleAssignment.target_id == domain_id,
-            RoleAssignment.inherited == false(),
-            RoleAssignment.actor_id.in_(group_ids))
+        # 'role_ids' is a dictionary, where keys are role IDs, and values
+        # are empty strings. Using dictionary for uniqueness
+        role_ids = {}
 
-        with sql.transaction() as session:
-            query = session.query(RoleAssignment.role_id).filter(
-                sql_constraints).distinct()
-        return [role.role_id for role in query.all()]
+        refs = RoleAssignment.objects.filter(
+                type=AssignmentType.GROUP_DOMAIN,
+                target_id=domain_id,
+                inherited=False,
+                actor_id__in=group_ids)
+        for ref in refs:
+            domain_ids[ref.role_id] = ''
+
+        return role_ids.keys()
+
+        #sql_constraints = sqlalchemy.and_(
+        #    RoleAssignment.type == AssignmentType.GROUP_DOMAIN,
+        #    RoleAssignment.target_id == domain_id,
+        #    RoleAssignment.inherited == false(),
+        #    RoleAssignment.actor_id.in_(group_ids))
+
+        #with sql.transaction() as session:
+        #    query = session.query(RoleAssignment.role_id).filter(
+        #        sql_constraints).distinct()
+        #return [role.role_id for role in query.all()]
 
     def list_role_ids_for_groups_on_project(
             self, group_ids, project_id, project_domain_id, project_parents):
@@ -303,41 +339,64 @@ class Assignment(keystone_assignment.Driver):
             # If there's no groups then there will be no project roles.
             return []
 
+        # 'role_ids' is a dictionary, where keys are role IDs, and values
+        # are empty strings. Using dictionary for uniqueness
+        role_ids = {}
+
         # NOTE(rodrigods): First, we always include projects with
         # non-inherited assignments
-        sql_constraints = sqlalchemy.and_(
-            RoleAssignment.type == AssignmentType.GROUP_PROJECT,
-            RoleAssignment.inherited == false(),
-            RoleAssignment.target_id == project_id)
+        refs = RoleAssignment.objects.filter(
+                type=AssignmentType.GROUP_PROJECT,
+                inherited=False,
+                target_id=project_id)
+        for ref in refs:
+            role_ids[ref.role_id] = ''
+        #sql_constraints = sqlalchemy.and_(
+        #    RoleAssignment.type == AssignmentType.GROUP_PROJECT,
+        #    RoleAssignment.inherited == false(),
+        #    RoleAssignment.target_id == project_id)
 
         if CONF.os_inherit.enabled:
             # Inherited roles from domains
-            sql_constraints = sqlalchemy.or_(
-                sql_constraints,
-                sqlalchemy.and_(
-                    RoleAssignment.type == AssignmentType.GROUP_DOMAIN,
-                    RoleAssignment.inherited,
-                    RoleAssignment.target_id == project_domain_id))
+            refs = RoleAssignment.objects.filter(
+                    type=AssignmentType.GROUP_DOMAIN,
+                    inherited=True, #TODO(rushiagr): sql has no 'True'!!
+                    target_id=project_domain_id)
+            for ref in refs:
+                role_ids[ref.role_id] = ''
+            #sql_constraints = sqlalchemy.or_(
+            #    sql_constraints,
+            #    sqlalchemy.and_(
+            #        RoleAssignment.type == AssignmentType.GROUP_DOMAIN,
+            #        RoleAssignment.inherited,
+            #        RoleAssignment.target_id == project_domain_id))
 
             # Inherited roles from projects
             if project_parents:
-                sql_constraints = sqlalchemy.or_(
-                    sql_constraints,
-                    sqlalchemy.and_(
-                        RoleAssignment.type == AssignmentType.GROUP_PROJECT,
-                        RoleAssignment.inherited,
-                        RoleAssignment.target_id.in_(project_parents)))
+                refs = RoleAssignment.objects.filter(
+                        type=AssignmentType.GROUP_PROJECT,
+                        inherited=True, #TODO(rushiagr): sql has no 'True'!!
+                        target_id__in=project_parents)
+                for ref in refs:
+                    role_ids[ref.role_id] = ''
+                #sql_constraints = sqlalchemy.or_(
+                #    sql_constraints,
+                #    sqlalchemy.and_(
+                #        RoleAssignment.type == AssignmentType.GROUP_PROJECT,
+                #        RoleAssignment.inherited,
+                #        RoleAssignment.target_id.in_(project_parents)))
+        return role_ids.keys()
 
-        sql_constraints = sqlalchemy.and_(
-            sql_constraints, RoleAssignment.actor_id.in_(group_ids))
+        #sql_constraints = sqlalchemy.and_(
+        #    sql_constraints, RoleAssignment.actor_id.in_(group_ids))
 
-        with sql.transaction() as session:
-            # NOTE(morganfainberg): Only select the columns we actually care
-            # about here, in this case role_id.
-            query = session.query(RoleAssignment.role_id).filter(
-                sql_constraints).distinct()
+        #with sql.transaction() as session:
+        #    # NOTE(morganfainberg): Only select the columns we actually care
+        #    # about here, in this case role_id.
+        #    query = session.query(RoleAssignment.role_id).filter(
+        #        sql_constraints).distinct()
 
-        return [result.role_id for result in query.all()]
+        #return [result.role_id for result in query.all()]
 
     def list_project_ids_for_groups(self, group_ids, hints,
                                     inherited=False):
@@ -349,38 +408,81 @@ class Assignment(keystone_assignment.Driver):
             # If there's no groups then there will be no domains.
             return []
 
-        group_sql_conditions = sqlalchemy.and_(
-            RoleAssignment.type == AssignmentType.GROUP_DOMAIN,
-            RoleAssignment.inherited == inherited,
-            RoleAssignment.actor_id.in_(group_ids))
+        # 'domain_ids' is a dictionary, where keys are domain IDs, and values
+        # are empty strings. Using dictionary for uniqueness
+        domain_ids = {}
+        refs = RoleAssignment.objects.filter(
+                type=AssignmentType.GROUP_DOMAIN,
+                inherited=inherited,
+                target_id__in=group_ids)
+        for ref in refs:
+            domain_ids[ref.target_id] = ''
+        return domain_ids.keys()
+        #group_sql_conditions = sqlalchemy.and_(
+        #    RoleAssignment.type == AssignmentType.GROUP_DOMAIN,
+        #    RoleAssignment.inherited == inherited,
+        #    RoleAssignment.actor_id.in_(group_ids))
 
-        with sql.transaction() as session:
-            query = session.query(RoleAssignment.target_id).filter(
-                group_sql_conditions).distinct()
-        return [x.target_id for x in query.all()]
+        #with sql.transaction() as session:
+        #    query = session.query(RoleAssignment.target_id).filter(
+        #        group_sql_conditions).distinct()
+        #return [x.target_id for x in query.all()]
 
     def add_role_to_user_and_project(self, user_id, tenant_id, role_id):
-        try:
-            with sql.transaction() as session:
-                session.add(RoleAssignment(
-                    type=AssignmentType.USER_PROJECT,
-                    actor_id=user_id, target_id=tenant_id,
-                    role_id=role_id, inherited=False))
-        except sql.DBDuplicateEntry:
+        # NOTE(rushiagr): we're doing a read, and then a write here, preserving
+        # the case when the exception will be thrown. Another alternative would
+        # be to just do a write, which will overwrite a previous value if it
+        # existed, and this won't raise an exception
+        ref = RoleAssignment(
+                type=AssignmentType.USER_PROJECT,
+                actor_id=user_id,
+                target_id=tenant_id,
+                role_id=role_id,
+                inherited=False)
+        if len(ref) != 0:
             msg = ('User %s already has role %s in tenant %s'
                    % (user_id, role_id, tenant_id))
             raise exception.Conflict(type='role grant', details=msg)
 
+        RoleAssignment.create(
+            type=AssignmentType.USER_PROJECT,
+            actor_id=user_id,
+            target_id=tenant_id,
+            role_id=role_id,
+            inherited=False)
+
+        #try:
+        #    with sql.transaction() as session:
+        #        session.add(RoleAssignment(
+        #            type=AssignmentType.USER_PROJECT,
+        #            actor_id=user_id, target_id=tenant_id,
+        #            role_id=role_id, inherited=False))
+        #except sql.DBDuplicateEntry:
+        #    msg = ('User %s already has role %s in tenant %s'
+        #           % (user_id, role_id, tenant_id))
+        #    raise exception.Conflict(type='role grant', details=msg)
+
+
     def remove_role_from_user_and_project(self, user_id, tenant_id, role_id):
-        with sql.transaction() as session:
-            q = session.query(RoleAssignment)
-            q = q.filter_by(actor_id=user_id)
-            q = q.filter_by(target_id=tenant_id)
-            q = q.filter_by(role_id=role_id)
-            if q.delete() == 0:
-                raise exception.RoleNotFound(message=_(
-                    'Cannot remove role that has not been granted, %s') %
-                    role_id)
+        try:
+            ref = RoleAssignment.get(
+                actor_id=user_id,
+                target_id=tenant_id,
+                role_id=role_id)
+            ref.delete()
+        except DoesNotExist:
+            raise exception.RoleNotFound(message=_(
+                'Cannot remove role that has not been granted, %s') %
+                role_id)
+        #with sql.transaction() as session:
+        #    q = session.query(RoleAssignment)
+        #    q = q.filter_by(actor_id=user_id)
+        #    q = q.filter_by(target_id=tenant_id)
+        #    q = q.filter_by(role_id=role_id)
+        #    if q.delete() == 0:
+        #        raise exception.RoleNotFound(message=_(
+        #            'Cannot remove role that has not been granted, %s') %
+        #            role_id)
 
     def list_role_assignments(self):
 
@@ -407,42 +509,78 @@ class Assignment(keystone_assignment.Driver):
                 assignment['inherited_to_projects'] = 'projects'
             return assignment
 
-        with sql.transaction() as session:
-            refs = session.query(RoleAssignment).all()
-            return [denormalize_role(ref) for ref in refs]
+        refs = RoleAssignment.objects.all()
+        return [denormalize_role(ref) for ref in refs]
+        #with sql.transaction() as session:
+        #    refs = session.query(RoleAssignment).all()
+        #    return [denormalize_role(ref) for ref in refs]
+
 
     def delete_project_assignments(self, project_id):
-        with sql.transaction() as session:
-            q = session.query(RoleAssignment)
-            q = q.filter_by(target_id=project_id)
-            q.delete(False)
+        # NOTE(rushiagr): this throws DoesNotExist error, so add try..except
+        # block temporarily
+        try:
+            ref = RoleAssignment.get(target_id=project_id)
+            ref.delete()
+        except DoesNotExist:
+            pass
+        #with sql.transaction() as session:
+        #    q = session.query(RoleAssignment)
+        #    q = q.filter_by(target_id=project_id)
+        #    q.delete(False)
 
     def delete_role_assignments(self, role_id):
-        with sql.transaction() as session:
-            q = session.query(RoleAssignment)
-            q = q.filter_by(role_id=role_id)
-            q.delete(False)
+        # TODO: batch operation here
+        refs = RoleAssignment.filter(role_id=role_id)
+        for ref in refs:
+            ref.delete()
+        #with sql.transaction() as session:
+        #    q = session.query(RoleAssignment)
+        #    q = q.filter_by(role_id=role_id)
+        #    q.delete(False)
 
     def delete_user(self, user_id):
-        with sql.transaction() as session:
-            q = session.query(RoleAssignment)
-            q = q.filter_by(actor_id=user_id)
-            q.delete(False)
+        refs_list = []
+        for type in [AssignmentType.USER_PROJECT,
+                AssignmentType.USER_DOMAIN,
+                AssignmentType.GROUP_PROJECT,
+                AssignmentType.GROUP_DOMAIN]:
+            refs_list.append(RoleAssignment.filter(type=type, actor_id=user_id))
+        for refs in refs_list:
+            for ref in refs:
+                ref.delete()
+
+        #with sql.transaction() as session:
+        #    q = session.query(RoleAssignment)
+        #    q = q.filter_by(actor_id=user_id)
+        #    q.delete(False)
 
     def delete_group(self, group_id):
-        with sql.transaction() as session:
-            q = session.query(RoleAssignment)
-            q = q.filter_by(actor_id=group_id)
-            q.delete(False)
+        refs_list = []
+        for type in [AssignmentType.USER_PROJECT,
+                AssignmentType.USER_DOMAIN,
+                AssignmentType.GROUP_PROJECT,
+                AssignmentType.GROUP_DOMAIN]:
+            refs_list.append(RoleAssignment.filter(type=type, actor_id=group_id))
+        for refs in refs_list:
+            for ref in refs:
+                ref.delete()
+
+        #with sql.transaction() as session:
+        #    q = session.query(RoleAssignment)
+        #    q = q.filter_by(actor_id=group_id)
+        #    q.delete(False)
 
 class RoleAssignment(cassandra.ExtrasModel):
     __tablename__ = 'assignment'
-    type = columns.Text(primary_key=True, partition_key=True, max_length(64))
-    actor_id = columns.Text(primary_key=True, partition_key=True, max_length(64))
-    target_id = columns.Text(primary_key=True, index=True, max_length(64))
-    role_id = columns.Text(primary_key=True, index=True, max_length(64))
+    type = columns.Text(primary_key=True, partition_key=True, max_length=64)
+    actor_id = columns.Text(primary_key=True, partition_key=True, max_length=64)
+    target_id = columns.Text(primary_key=True, index=True, max_length=64)
+    role_id = columns.Text(primary_key=True, index=True, max_length=64)
     inherited = columns.Boolean(default=False, required=True)
 
+connection.setup(cassandra.ips, cassandra.keyspace)
+sync_table(RoleAssignment)
 #class RoleAssignment(sql.ModelBase, sql.DictBase):
 #    __tablename__ = 'assignment'
 #    attributes = ['type', 'actor_id', 'target_id', 'role_id', 'inherited']
