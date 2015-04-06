@@ -160,11 +160,24 @@ class Assignment(keystone_assignment.Driver):
         #    q = q.filter(RoleAssignment.target_id == (project_id or domain_id))
         #    q = q.filter(RoleAssignment.inherited == inherited_to_projects)
         #    return [x.role_id for x in q.all()]
-        refs = RoleAssignment.objects.filter(
-                actor_id=(user_id or group_id),
-                target_id=(project_id or domain_id),
-                inherited=inherited_to_projects)
-        return [ref.role_id for ref in refs]
+        refs_list = []
+        for type in [AssignmentType.USER_PROJECT,
+                AssignmentType.USER_DOMAIN,
+                AssignmentType.GROUP_PROJECT,
+                AssignmentType.GROUP_DOMAIN]:
+            refs_list.append(RoleAssignment.objects.filter(
+                    type=type,
+                    actor_id=(user_id or group_id),
+                    target_id=(project_id or domain_id),
+                    #inherited=inherited_to_projects
+                    ))
+
+        role_list = []
+        for refs in refs_list:
+            for ref in refs:
+                if ref.inherited == inherited_to_projects:
+                    role_list.append(ref.role_id)
+        return role_list
 
     def _build_grant_filter(self, role_id, user_id, group_id,
                             domain_id, project_id, inherited_to_projects):
