@@ -166,7 +166,7 @@ class Assignment(keystone_assignment.Driver):
                 inherited=inherited_to_projects)
         return [ref.role_id for ref in refs]
 
-    def _build_grant_filter(self, session, role_id, user_id, group_id,
+    def _build_grant_filter(self, role_id, user_id, group_id,
                             domain_id, project_id, inherited_to_projects):
         #q = session.query(RoleAssignment)
         #q = q.filter_by(actor_id=user_id or group_id)
@@ -185,7 +185,7 @@ class Assignment(keystone_assignment.Driver):
                             domain_id=None, project_id=None,
                             inherited_to_projects=False):
         refs = self._build_grant_filter(
-                    session, role_id, user_id, group_id, domain_id, project_id,
+                    role_id, user_id, group_id, domain_id, project_id,
                     inherited_to_projects)
         if len(refs) == 0:
             raise exception.RoleNotFound(role_id=role_id)
@@ -204,7 +204,7 @@ class Assignment(keystone_assignment.Driver):
         # TODO(rushiagr): move length checking also to _build_grant_filter, and
         # rename that method
         refs = self._build_grant_filter(
-                    session, role_id, user_id, group_id, domain_id, project_id,
+                    role_id, user_id, group_id, domain_id, project_id,
                     inherited_to_projects)
         if len(refs) == 0:
             raise exception.RoleNotFound(role_id=role_id)
