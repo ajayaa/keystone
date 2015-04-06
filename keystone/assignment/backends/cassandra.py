@@ -187,7 +187,20 @@ class Assignment(keystone_assignment.Driver):
         #q = q.filter_by(role_id=role_id)
         #q = q.filter_by(inherited=inherited_to_projects)
         #return q
+        def _calc_assignment_type():
+            # Figure out the assignment type we're checking for from the args.
+            if user_id:
+                if project_id:
+                    return AssignmentType.USER_PROJECT
+                else:
+                    return AssignmentType.USER_DOMAIN
+            elif group_id:
+                if project_id:
+                    return AssignmentType.GROUP_PROJECT
+                else:
+                    return AssignmentType.GROUP_DOMAIN
         refs = RoleAssignment.objects.filter(
+                type=_calc_assignment_type(),
                 actor_id=(user_id or group_id),
                 target_id=(project_id or domain_id),
                 role_id=role_id,
