@@ -359,11 +359,11 @@ class Assignment(keystone_assignment.Driver):
         # NOTE(rodrigods): First, we always include projects with
         # non-inherited assignments
         refs = RoleAssignment.objects.filter(
-                type=AssignmentType.GROUP_PROJECT,
-                inherited=False,
                 target_id=project_id)
+                #inherited=False)
         for ref in refs:
-            role_ids[ref.role_id] = ''
+            if ref.type == AssignmentType.GROUP_PROJECT:
+                role_ids[ref.role_id] = ''
         #sql_constraints = sqlalchemy.and_(
         #    RoleAssignment.type == AssignmentType.GROUP_PROJECT,
         #    RoleAssignment.inherited == false(),
@@ -372,11 +372,11 @@ class Assignment(keystone_assignment.Driver):
         if CONF.os_inherit.enabled:
             # Inherited roles from domains
             refs = RoleAssignment.objects.filter(
-                    type=AssignmentType.GROUP_DOMAIN,
-                    inherited=True, #TODO(rushiagr): sql has no 'True'!!
+                    #inherited=True, #TODO(rushiagr): sql has no 'True'!!
                     target_id=project_domain_id)
             for ref in refs:
-                role_ids[ref.role_id] = ''
+                if ref.type == AssignmentType.GROUP_DOMAIN:
+                    role_ids[ref.role_id] = ''
             #sql_constraints = sqlalchemy.or_(
             #    sql_constraints,
             #    sqlalchemy.and_(
@@ -387,11 +387,11 @@ class Assignment(keystone_assignment.Driver):
             # Inherited roles from projects
             if project_parents:
                 refs = RoleAssignment.objects.filter(
-                        type=AssignmentType.GROUP_PROJECT,
-                        inherited=True, #TODO(rushiagr): sql has no 'True'!!
+                        #inherited=True, #TODO(rushiagr): sql has no 'True'!!
                         target_id__in=project_parents)
                 for ref in refs:
-                    role_ids[ref.role_id] = ''
+                    if ref.type == AssignmentType.GROUP_PROJECT:
+                        role_ids[ref.role_id] = ''
                 #sql_constraints = sqlalchemy.or_(
                 #    sql_constraints,
                 #    sqlalchemy.and_(
