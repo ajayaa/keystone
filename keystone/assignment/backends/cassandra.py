@@ -577,7 +577,7 @@ class RoleAssignment(cassandra.ExtrasModel):
     actor_id = columns.Text(primary_key=True, partition_key=True, max_length=64)
     target_id = columns.Text(primary_key=True, index=True, max_length=64)
     role_id = columns.Text(primary_key=True, index=True, max_length=64)
-    inherited = columns.Boolean(default=False, required=True)
+    inherited = columns.Boolean(default=False, required=True, index=True)
 
 connection.setup(cassandra.ips, cassandra.keyspace)
 sync_table(RoleAssignment)
