@@ -1086,6 +1086,10 @@ FILE_OPTIONS = {
             cfg.StrOpt('driver', default=('keystone.jio_policy.backends.sql.Policy'),
                 help='jio policy backend.'),
     ],
+    'cubeit': [
+            cfg.StrOpt('driver', default=('keystone.cubeit.backends.sql.CubeIt'),
+                help='Cubeit backend.'),
+    ],
 }
 
 
