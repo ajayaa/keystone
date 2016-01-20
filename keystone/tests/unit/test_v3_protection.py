@@ -1384,17 +1384,17 @@ class IdentityTestv3CloudPolicySample(test_v3.RestfulTestCase,
         self.delete('/auth/tokens', token=admin_token,
                     headers={'X-Subject-Token': user_token})
 
-    def test_project_admin_get_project(self):
+    def test_user_with_a_role_get_project(self):
         user_auth = self.build_authentication_request(
             user_id=self.just_a_user['id'],
             password=self.just_a_user['password'],
             project_id=self.project['id'])
 
-        self.get('/projects/%s' % self.project['id'], auth=user_auth,
-                 expected_status=exception.ForbiddenAction.code)
+        resp = self.get('/projects/%s' % self.project['id'], auth=user_auth)
+        self.assertEqual(self.project['id'],
+                         jsonutils.loads(resp.body)['project']['id'])
 
-        # Now, authenticate with a user that does have the project
-        # admin role
+    def test_project_admin_get_project(self):
         admin_auth = self.build_authentication_request(
             user_id=self.project_admin_user['id'],
             password=self.project_admin_user['password'],
